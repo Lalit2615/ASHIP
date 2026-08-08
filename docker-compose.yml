@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  target-app:
+    build:
+      context: ./target-app
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+      - FLASK_ENV=development
+    networks:
+      - aship-network
+
+  opa:
+    image: openpolicyagent/opa:latest
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./security:/policies
+    command: run --server --log-level=debug /policies
+    networks:
+      - aship-network
+
+  ai-agent:
+    build:
+      context: ./ai-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - OPA_URL=http://opa:8181/v1/data/aship/security/allow
+      - TARGET_APP_URL=http://target-app:5001
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+    depends_on:
+      - target-app
+      - opa
+    networks:
+      - aship-network
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - ai-agent
+    networks:
+      - aship-network
+
+networks:
+  aship-network:
+    driver: bridge
