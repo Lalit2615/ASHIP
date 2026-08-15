@@ -4,7 +4,7 @@ import asyncio
 import hmac
 import hashlib
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import httpx
@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="ASHIP AI Agent (Enterprise)")
+app = FastAPI(title="ASHIP AI Agent (Enterprise Upgrade)")
 
 # Enable CORS
 app.add_middleware(
@@ -47,6 +47,9 @@ REGISTERED_SERVICES = {
         "environment": "production"
     }
 }
+
+# Incident Audit History for Post-Mortem Export
+INCIDENT_HISTORY = []
 
 # Built-in RAG Post-Mortem & SRE Runbook Knowledge Base
 SRE_RUNBOOKS = {
@@ -99,8 +102,10 @@ async def root():
         "endpoints": {
             "logs_sse": "/logs (GET EventStream)",
             "alert_webhook": "/webhook/alert (POST)",
+            "prometheus_webhook": "/webhook/prometheus (POST Alertmanager payload)",
             "register_service": "/register-service (POST)",
             "registered_services": "/registered-services (GET)",
+            "export_postmortem": "/export-postmortem (GET Markdown Report)",
             "api_docs": "/docs"
         },
         "dashboard_ui": "http://localhost:3000"
@@ -121,6 +126,26 @@ async def register_service(reg: ServiceRegistration):
         "message": f"Service '{reg.service_name}' registered for ASHIP auto-healing.",
         "details": reg.model_dump()
     }
+
+@app.get("/export-postmortem")
+async def export_postmortem():
+    """Generates a formatted markdown incident post-mortem report."""
+    report = "# ASHIP Autonomous Incident Post-Mortem Report\n\n"
+    report += f"**Protocol**: ASHIP Enterprise OODA Self-Healing\n\n"
+    report += "## Incident Audit History\n\n"
+    
+    if not INCIDENT_HISTORY:
+        report += "_No critical incidents logged in current session window._\n"
+    else:
+        for idx, inc in enumerate(INCIDENT_HISTORY, 1):
+            report += f"### Incident #{idx}: {inc.get('alert', 'Unknown')}\n"
+            report += f"- **Target Service**: `{inc.get('service_name')}`\n"
+            report += f"- **Action Taken**: `{inc.get('action')}`\n"
+            report += f"- **OPA Status**: `{inc.get('opa_status')}`\n"
+            report += f"- **HMAC Audit Signature**: `sha256:{inc.get('signature')}`\n"
+            report += f"- **Reasoning**: {inc.get('reasoning')}\n\n"
+
+    return Response(content=report, media_type="text/markdown")
 
 @app.get("/logs")
 async def get_logs(request: Request):
@@ -205,10 +230,11 @@ async def run_ooda_loop(alert_name: str, details: str, environment: str = "produ
                     from langchain_core.prompts import ChatPromptTemplate
                     
                     chat = ChatGroq(temperature=0, groq_api_key=groq_api_key, model_name="llama-3.1-8b-instant")
+                    # Double escape curly braces for LangChain schema template
                     prompt = ChatPromptTemplate.from_messages([
                         ("system", (
                             "You are ASHIP, an autonomous self-healing SRE agent. "
-                            "Output JSON matching schema: {\"action\": \"<action>\", \"target\": \"" + service_name + "\", \"confidence\": 0.98, \"reasoning\": \"<explanation>\"}. "
+                            "Output JSON matching schema: {{\\\"action\\\": \\\"<action>\\\", \\\"target\\\": \\\"" + service_name + "\\\", \\\"confidence\\\": 0.98, \\\"reasoning\\\": \\\"<explanation>\\\"}}. "
                             "Allowed actions: 'restart_pod', 'rollback_deployment', 'delete_database'."
                         )),
                         ("human", "Alert: {alert_name}. Details: {details}.")
@@ -278,6 +304,16 @@ async def run_ooda_loop(alert_name: str, details: str, environment: str = "produ
 
             await asyncio.sleep(0.8)
 
+            # Log into Post-Mortem Audit History
+            INCIDENT_HISTORY.append({
+                "alert": alert_name,
+                "service_name": service_name,
+                "action": decision.get("action"),
+                "opa_status": "APPROVED" if opa_approved else "DENIED",
+                "signature": signature,
+                "reasoning": decision.get("reasoning")
+            })
+
             # 4. ACT
             if opa_approved:
                 await send_log(f"✅ [ACT] OPA Approved! Executing action: {decision.get('action')} on service [{service_name}]")
@@ -316,6 +352,25 @@ async def receive_alert(request: Request):
     
     asyncio.create_task(run_ooda_loop(alert_name, details, environment, operator_approved, service_name, target_url))
     return {"status": "alert_received", "message": f"Processing OODA loop for {alert_name} on {service_name}."}
+
+@app.post("/webhook/prometheus")
+async def prometheus_webhook(request: Request):
+    """Adapter for standard Prometheus Alertmanager payloads."""
+    payload = await request.json()
+    alerts = payload.get("alerts", [])
+    processed = 0
+    for alert in alerts:
+        labels = alert.get("labels", {})
+        annotations = alert.get("annotations", {})
+        alert_name = labels.get("alertname", "PrometheusAlert")
+        details = annotations.get("summary") or annotations.get("description") or "Prometheus anomaly"
+        service_name = labels.get("service") or labels.get("job") or "aship-target-app"
+        env = labels.get("environment", "production")
+        
+        asyncio.create_task(run_ooda_loop(alert_name, details, env, False, service_name))
+        processed += 1
+        
+    return {"status": "success", "processed_alerts": processed}
 
 if __name__ == '__main__':
     import uvicorn

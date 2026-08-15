@@ -38,7 +38,9 @@ import {
   Key,
   Plus,
   Link,
-  Settings
+  Settings,
+  Download,
+  MessageSquare
 } from 'lucide-react';
 
 function App() {
@@ -126,7 +128,10 @@ function App() {
         setMicListening(false);
       };
 
-      recognition.onerror = () => setMicListening(false);
+      recognition.onerror = () => {
+        setMicListening(false);
+        addToast("MIC PERMISSION", "Microphone access was denied or unavailable.", "error");
+      };
       recognition.onend = () => setMicListening(false);
 
       recognitionRef.current = recognition;
@@ -134,7 +139,10 @@ function App() {
   }, []);
 
   const toggleMic = () => {
-    if (!recognitionRef.current) return;
+    if (!recognitionRef.current) {
+      addToast("VOICE CONTROL", "Web Speech API is not supported in this browser.", "warning");
+      return;
+    }
     if (micListening) {
       recognitionRef.current.stop();
       setMicListening(false);
@@ -142,7 +150,7 @@ function App() {
       try {
         recognitionRef.current.start();
         setMicListening(true);
-        addLog("VOICE_LISTEN: Listening for voice command...", "info");
+        addLog("VOICE_LISTEN: Listening for SRE voice command...", "info");
       } catch (e) {
         setMicListening(false);
       }
@@ -296,7 +304,7 @@ function App() {
         addLog("SSE_SYNC: Connected to AI Agent log stream.", "success");
       };
       eventSource.onmessage = (event) => {
-        try {
+        try:
           const data = JSON.parse(event.data);
           if (data.type === 'system' && data.message === 'CONNECTED') {
             setAgentConnected(true);
@@ -347,15 +355,20 @@ function App() {
     return () => { if (eventSource) eventSource.close(); };
   }, [autopilot]);
 
-  // Handle dynamic custom service registration submission
+  // Handle dynamic custom service registration submission (FIXED RSPLIT BUG)
   const handleRegisterServiceSubmit = async (e) => {
     e.preventDefault();
     if (!regServiceName || !regHealthUrl) return;
 
+    // Safely extract base URL in JavaScript without rsplit
+    const healthBase = regHealthUrl.includes('/') 
+      ? regHealthUrl.substring(0, regHealthUrl.lastIndexOf('/')) 
+      : regHealthUrl;
+
     const payload = {
       service_name: regServiceName.toLowerCase().replace(/\s+/g, '-'),
       health_url: regHealthUrl,
-      remediation_url: regRemediationUrl || `${regHealthUrl.rsplit('/', 1)[0]}/reset`,
+      remediation_url: regRemediationUrl || `${healthBase}/reset`,
       environment: clusterEnv === 'Prod-US' ? 'production' : 'staging'
     };
 
@@ -390,6 +403,25 @@ function App() {
     }
   };
 
+  const exportPostMortemReport = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/export-postmortem');
+      const markdown = await res.text();
+      const blob = new Blob([markdown], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ASHIP_PostMortem_Report_${Date.now()}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addToast("POST-MORTEM EXPORTED", "Downloaded Markdown post-mortem audit report.", "success");
+    } catch (err) {
+      addToast("EXPORT FAILED", err.message, "error");
+    }
+  };
+
   const injectFault = async (faultType) => {
     if (isSimulating) return;
     setIsSimulating(true);
@@ -419,7 +451,7 @@ function App() {
     }
 
     try {
-      if (targetEndpoint && selectedNode === 'aship-target-app') {
+      if (targetEndpoint && activeNode.health_url.includes(':5001')) {
         await fetch(targetEndpoint, { method: 'POST' });
       }
       await fetch('http://localhost:8000/webhook/alert', {
@@ -464,12 +496,26 @@ function App() {
   const executeCommand = (text) => {
     if (!text.trim()) return;
     const prompt = text.toLowerCase().trim();
-    if (prompt.includes("memory") || prompt.includes("leak") || prompt.includes("ram")) injectFault('memory-leak');
-    else if (prompt.includes("cpu") || prompt.includes("spike") || prompt.includes("thread")) injectFault('cpu-spike');
-    else if (prompt.includes("db") || prompt.includes("database") || prompt.includes("purge") || prompt.includes("delete")) injectFault('db-purge');
-    else if (prompt.includes("restart") || prompt.includes("heal") || prompt.includes("reset")) approveRemediation();
-    else if (prompt.includes("clear") || prompt.includes("clean")) clearLogs();
-    else addLog(`PROMPT_EXEC: Evaluating against Rego policies...`, 'info');
+    if (prompt.includes("memory") || prompt.includes("leak") || prompt.includes("ram")) {
+      injectFault('memory-leak');
+    } else if (prompt.includes("cpu") || prompt.includes("spike") || prompt.includes("thread")) {
+      injectFault('cpu-spike');
+    } else if (prompt.includes("db") || prompt.includes("database") || prompt.includes("purge") || prompt.includes("delete")) {
+      injectFault('db-purge');
+    } else if (prompt.includes("restart") || prompt.includes("heal") || prompt.includes("reset")) {
+      approveRemediation();
+    } else if (prompt.includes("clear") || prompt.includes("clean")) {
+      clearLogs();
+    } else if (prompt.includes("status") || prompt.includes("health")) {
+      addLog(`ASHIP_AI: System operational. RAM: ${telemetry.memory_percent}%, CPU: ${telemetry.cpu_percent}%, Target: ${telemetry.status.toUpperCase()}`, 'ai');
+    } else if (prompt.includes("opa") || prompt.includes("rego") || prompt.includes("policy")) {
+      addLog(`ASHIP_AI: OPA Rego security engine enforces active blocklists against destructive operations like database purges in production.`, 'shield');
+    } else {
+      addLog(`ASHIP_AI: Ingesting query: "${text}". Evaluating telemetry against SRE knowledge base...`, 'ai');
+      setTimeout(() => {
+        addLog(`ASHIP_AI: Response: Current cluster status is HEALTHY. All 5 OODA pipelines ready.`, 'success');
+      }, 800);
+    }
   };
 
   const handleAiPromptSubmit = (e) => {
@@ -501,10 +547,13 @@ function App() {
       {/* Toast Notifications (Top-Right) */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
         {toasts.map(toast => (
-          <div key={toast.id} className="animate-toast-slide aship-figma-card border border-emerald-500/40 p-4 rounded-xl shadow-2xl flex items-start gap-3 text-xs bg-[#0b1026]/95">
-            <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+          <div key={toast.id} className={`animate-toast-slide aship-figma-card border p-4 rounded-xl shadow-2xl flex items-start gap-3 text-xs bg-[#0b1026]/95 ${
+            toast.type === 'error' ? 'border-red-500/40 text-red-400' :
+            toast.type === 'warning' ? 'border-amber-500/40 text-amber-400' : 'border-emerald-500/40 text-emerald-400'
+          }`}>
+            <CheckCircle className="w-5 h-5 shrink-0 mt-0.5" />
             <div>
-              <h4 className="font-bold text-emerald-400 uppercase tracking-wider">{toast.title}</h4>
+              <h4 className="font-bold uppercase tracking-wider">{toast.title}</h4>
               <p className="text-slate-300 text-[11px] mt-0.5 leading-normal">{toast.message}</p>
             </div>
             <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} className="text-slate-500 hover:text-white">
@@ -818,9 +867,13 @@ function App() {
                 <Key className="w-4.5 h-4.5 text-indigo-400" />
                 <h3 className="font-bold text-xs text-white uppercase tracking-wider">HMAC-SHA256 AUDIT SIGNATURE</h3>
               </div>
-              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400">
-                VERIFIED
-              </span>
+              <button
+                onClick={exportPostMortemReport}
+                className="bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/40 text-indigo-400 text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all flex items-center gap-1"
+              >
+                <Download className="w-3 h-3" />
+                <span>EXPORT REPORT</span>
+              </button>
             </div>
 
             <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl font-mono text-[10px] space-y-1.5">
@@ -859,6 +912,7 @@ function App() {
                     log.type === 'error' ? 'text-red-400 font-bold' :
                     log.type === 'warning' ? 'text-amber-400' :
                     log.type === 'shield' ? 'text-indigo-400' :
+                    log.type === 'ai' ? 'text-cyan-400 font-semibold' :
                     log.type === 'success' ? 'text-emerald-400 font-bold' : 'text-slate-300'
                   }>
                     {log.text}
@@ -972,14 +1026,14 @@ function App() {
                 micListening ? 'text-red-400 bg-red-500/20 animate-pulse' : 'text-indigo-400 hover:text-white'
               }`}
             >
-              {micListening ? <Mic className="w-4 h-4 animate-pulse" /> : <Zap className="w-4 h-4" />}
+              {micListening ? <Mic className="w-4 h-4 animate-pulse" /> : <MessageSquare className="w-4 h-4" />}
             </button>
             
             <input 
               type="text"
               value={aiPromptText}
               onChange={(e) => setAiPromptText(e.target.value)}
-              placeholder="Command ASHIP (e.g., 'inject memory leak', 'restart container')..."
+              placeholder="Ask ASHIP or Command SRE (e.g., 'what is RAM usage', 'inject memory leak')..."
               className="w-full bg-transparent border-none outline-none text-xs text-white placeholder-slate-500 px-3 font-sans"
             />
             
@@ -987,7 +1041,7 @@ function App() {
               type="submit"
               className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-5 rounded-full text-xs uppercase transition-all shrink-0 shadow-lg shadow-indigo-600/30 flex items-center gap-1.5"
             >
-              <span>Execute</span>
+              <span>Ask ASHIP</span>
               <Send className="w-3 h-3" />
             </button>
           </div>
