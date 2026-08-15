@@ -23,10 +23,26 @@ import {
   Radio,
   X,
   Play,
-  RotateCcw
+  RotateCcw,
+  Sparkles,
+  Lock,
+  FileCode,
+  Sliders,
+  Check,
+  ChevronRight,
+  Eye,
+  Compass,
+  CheckCircle2,
+  AlertCircle,
+  HelpCircle,
+  Key,
+  Plus,
+  Link,
+  Settings
 } from 'lucide-react';
 
 function App() {
+  // Telemetry state from Target App Port 5001
   const [telemetry, setTelemetry] = useState({
     status: 'healthy',
     memory_state: 'low',
@@ -36,14 +52,16 @@ function App() {
   });
 
   const [logs, setLogs] = useState([
-    { id: 1, time: new Date().toLocaleTimeString(), text: 'SYS_INIT: Mission Control War Room online. Node mesh connected.', type: 'info' }
+    { id: 1, time: new Date().toLocaleTimeString(), text: 'SYS_INIT: ASHIP Universal Auto-Healing Platform online. Integration drivers active.', type: 'info' }
   ]);
 
   const [agentConnected, setAgentConnected] = useState(false);
   const [targetConnected, setTargetConnected] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   
-  // Mission Control States & Animations
+  // Figma SRE Control Center States
+  const [clusterEnv, setClusterEnv] = useState('Local-Minikube'); // 'Local-Minikube' | 'Staging-EU' | 'Prod-US'
+  const [selectedNode, setSelectedNode] = useState('aship-target-app');
   const [autopilot, setAutopilot] = useState(true);
   const [pendingAction, setPendingAction] = useState(null);
   const [audioEnabled, setAudioEnabled] = useState(false);
@@ -51,13 +69,25 @@ function App() {
   const [hudTime, setHudTime] = useState('');
   const [micListening, setMicListening] = useState(false);
   const [nodeState, setNodeState] = useState('healthy'); // 'healthy' | 'alert' | 'remediating' | 'resolved'
+  const [oodaStage, setOodaStage] = useState(0); // 0: Idle, 1: Observe, 2: Orient, 3: Decide, 4: Validate, 5: Act
+  const [lastHmacSignature, setLastHmacSignature] = useState('sha256:7f4a9b0c2d3e4f5a6b7c8d9e0f1a2b3c');
+  const [lastMatchedRunbook, setLastMatchedRunbook] = useState('K8s-RB-102: Container OOM Recovery');
   const [toasts, setToasts] = useState([]);
-  const [timelineValue, setTimelineValue] = useState(100);
-  const [incidents, setIncidents] = useState([
-    { id: 'INC-101', time: '12:00:15', name: 'PodOOMKilled', status: 'RESOLVED', node: 'TARGET-APP-POD' }
+
+  // Universal External Service Registration Modal States
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [regServiceName, setRegServiceName] = useState('');
+  const [regHealthUrl, setRegHealthUrl] = useState('');
+  const [regRemediationUrl, setRegRemediationUrl] = useState('');
+  
+  const [topologyNodes, setTopologyNodes] = useState([
+    { id: 'aship-target-app', name: 'aship-target-app', status: 'Healthy', type: 'Target Pod', port: '5001', health_url: 'http://localhost:5001/health', remediation_url: 'http://localhost:5001/chaos/reset' },
+    { id: 'auth-service', name: 'auth-service', status: 'Healthy', type: 'Gateway', port: '8080', health_url: 'http://localhost:8080/health', remediation_url: 'http://localhost:8080/reset' },
+    { id: 'postgres-db', name: 'postgres-db-prim', status: 'Healthy', type: 'Database', port: '5432', health_url: 'http://localhost:5432/health', remediation_url: 'http://localhost:5432/reset' },
+    { id: 'redis-cache', name: 'redis-cache-01', status: 'Healthy', type: 'Cache', port: '6379', health_url: 'http://localhost:6379/health', remediation_url: 'http://localhost:6379/reset' }
   ]);
 
-  // Rolling metrics history
+  // Rolling metrics history for sparkline SVG trend curves
   const [metricHistory, setMetricHistory] = useState([]);
   
   // Audio Synth refs
@@ -141,7 +171,7 @@ function App() {
         mem: telemetry.memory_percent,
         time: new Date().toLocaleTimeString()
       }];
-      if (next.length > 15) next.shift();
+      if (next.length > 20) next.shift();
       return next;
     });
   }, [telemetry]);
@@ -173,44 +203,6 @@ function App() {
     }
     return () => stopAudio();
   }, [audioEnabled]);
-
-  // Alert Tone frequency transitions
-  useEffect(() => {
-    if (!audioCtxRef.current || !gainNodeRef.current) return;
-    const ctx = audioCtxRef.current;
-    
-    if (telemetry.status === 'unhealthy') {
-      if (humOscRef.current) {
-        humOscRef.current.frequency.exponentialRampToValueAtTime(120, ctx.currentTime + 0.8);
-      }
-      if (!alertOscRef.current) {
-        const alertOsc = ctx.createOscillator();
-        alertOsc.type = 'triangle';
-        alertOsc.frequency.setValueAtTime(300, ctx.currentTime);
-        
-        const lfo = ctx.createOscillator();
-        lfo.frequency.setValueAtTime(1.5, ctx.currentTime);
-        const lfoGain = ctx.createGain();
-        lfoGain.gain.setValueAtTime(0.006, ctx.currentTime);
-        
-        lfo.connect(lfoGain);
-        lfoGain.connect(gainNodeRef.current.gain);
-        alertOsc.connect(gainNodeRef.current);
-        
-        lfo.start();
-        alertOsc.start();
-        alertOscRef.current = alertOsc;
-      }
-    } else {
-      if (humOscRef.current) {
-        humOscRef.current.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 1);
-      }
-      if (alertOscRef.current) {
-        try { alertOscRef.current.stop(); } catch (e) {}
-        alertOscRef.current = null;
-      }
-    }
-  }, [telemetry.status]);
 
   const stopAudio = () => {
     if (humOscRef.current) {
@@ -263,8 +255,12 @@ function App() {
           if (telemetry.status === 'unhealthy' && data.status === 'healthy') {
             playChime();
             setNodeState('resolved');
-            addToast("INCIDENT RESOLVED", "TARGET-APP-POD metrics healed back to steady state cyan.", "success");
-            setTimeout(() => setNodeState('healthy'), 1000);
+            setOodaStage(5);
+            addToast("INFRASTRUCTURE HEALED", "Target pod metrics restored to normal baseline.", "success");
+            setTimeout(() => {
+              setNodeState('healthy');
+              setOodaStage(0);
+            }, 1200);
           }
           setTelemetry(data);
           setTargetConnected(true);
@@ -285,7 +281,7 @@ function App() {
     if (upper.includes("❌") || upper.includes("FATAL") || upper.includes("DENIED")) return "error";
     if (upper.includes("⚠️") || upper.includes("ALERT") || upper.includes("WARNING")) return "warning";
     if (upper.includes("🤖") || upper.includes("OODA") || upper.includes("OBSERVE") || upper.includes("ORIENT") || upper.includes("DECIDE")) return "ai";
-    if (upper.includes("🛡️") || upper.includes("VALIDATE") || upper.includes("OPA") || upper.includes("SHIELD") || upper.includes("HMAC")) return "shield";
+    if (upper.includes("🛡️") || upper.includes("VALIDATE") || upper.includes("OPA") || upper.includes("SHIELD") || upper.includes("HMAC") || upper.includes("REGISTRATION")) return "shield";
     if (upper.includes("APPROVED") || upper.includes("SUCCESS") || upper.includes("ACT") || upper.includes("COMPLETE")) return "success";
     return "info";
   };
@@ -308,7 +304,23 @@ function App() {
             const rawMsg = data.message;
             addLog(rawMsg, detectLogType(rawMsg));
 
-            if (rawMsg.includes("[ACT] Restarting") || rawMsg.includes("Executing action")) {
+            // Sync 5-Stage OODA Pipeline state
+            if (rawMsg.includes("[OBSERVE] Alert ingested")) {
+              setOodaStage(1);
+            } else if (rawMsg.includes("[RAG] Matched SRE Runbook")) {
+              const rbPart = rawMsg.substring(rawMsg.indexOf("K8s-RB-"));
+              setLastMatchedRunbook(rbPart || 'K8s-RB-102: Container OOM Recovery');
+            } else if (rawMsg.includes("[ORIENT] Current Telemetry")) {
+              setOodaStage(2);
+            } else if (rawMsg.includes("[DECIDE] Proposed Action")) {
+              setOodaStage(3);
+            } else if (rawMsg.includes("[HMAC] Audit Signature")) {
+              const hash = rawMsg.substring(rawMsg.indexOf("sha256:"));
+              setLastHmacSignature(hash || 'sha256:7f4a9b0c2d3e4f5a6b7c8d9e0f1a2b3c');
+            } else if (rawMsg.includes("[VALIDATE] Submitting proposed action")) {
+              setOodaStage(4);
+            } else if (rawMsg.includes("[ACT] Restarting") || rawMsg.includes("Executing action")) {
+              setOodaStage(5);
               setNodeState('remediating');
             }
 
@@ -335,32 +347,81 @@ function App() {
     return () => { if (eventSource) eventSource.close(); };
   }, [autopilot]);
 
+  // Handle dynamic custom service registration submission
+  const handleRegisterServiceSubmit = async (e) => {
+    e.preventDefault();
+    if (!regServiceName || !regHealthUrl) return;
+
+    const payload = {
+      service_name: regServiceName.toLowerCase().replace(/\s+/g, '-'),
+      health_url: regHealthUrl,
+      remediation_url: regRemediationUrl || `${regHealthUrl.rsplit('/', 1)[0]}/reset`,
+      environment: clusterEnv === 'Prod-US' ? 'production' : 'staging'
+    };
+
+    try {
+      const res = await fetch('http://localhost:8000/register-service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        addToast("SERVICE REGISTERED", `Registered '${payload.service_name}' for ASHIP auto-healing.`, "success");
+        setTopologyNodes(prev => [
+          ...prev,
+          {
+            id: payload.service_name,
+            name: payload.service_name,
+            status: 'Healthy',
+            type: 'Custom App',
+            port: '8080',
+            health_url: payload.health_url,
+            remediation_url: payload.remediation_url
+          }
+        ]);
+        setSelectedNode(payload.service_name);
+        setShowRegisterModal(false);
+        setRegServiceName('');
+        setRegHealthUrl('');
+        setRegRemediationUrl('');
+      }
+    } catch (err) {
+      addLog(`REG_ERR: ${err.message}`, 'error');
+    }
+  };
+
   const injectFault = async (faultType) => {
     if (isSimulating) return;
     setIsSimulating(true);
     setNodeState('alert');
+    setOodaStage(1);
 
-    let alertPayload = { environment: 'production' };
+    const activeNode = topologyNodes.find(n => n.id === selectedNode) || topologyNodes[0];
+
+    let alertPayload = {
+      environment: clusterEnv === 'Prod-US' ? 'production' : 'staging',
+      service_name: activeNode.name,
+      target_url: activeNode.health_url
+    };
     let targetEndpoint = '';
 
     if (faultType === 'memory-leak') {
       targetEndpoint = 'http://localhost:5001/chaos/memory-leak';
       alertPayload.alert = "PodOOMKilled";
-      alertPayload.details = "RAM saturation limit breached (128Mi limit)";
-      setIncidents(prev => [{ id: `INC-${Date.now().toString().slice(-3)}`, time: new Date().toLocaleTimeString(), name: 'PodOOMKilled', status: 'ACTIVE', node: 'TARGET-APP-POD' }, ...prev]);
+      alertPayload.details = `RAM saturation limit breached on service [${activeNode.name}]`;
     } else if (faultType === 'cpu-spike') {
       targetEndpoint = 'http://localhost:5001/chaos/cpu-spike';
       alertPayload.alert = "CpuSpikeAlert";
-      alertPayload.details = "CPU scheduler threadpool locked (95.1%)";
-      setIncidents(prev => [{ id: `INC-${Date.now().toString().slice(-3)}`, time: new Date().toLocaleTimeString(), name: 'CpuSpikeAlert', status: 'ACTIVE', node: 'TARGET-APP-POD' }, ...prev]);
+      alertPayload.details = `CPU scheduler threadpool locked on service [${activeNode.name}]`;
     } else if (faultType === 'db-purge') {
       alertPayload.alert = "DatabaseResetRequest";
-      alertPayload.details = "Rogue action: request 'delete_database' on prod-db";
-      setIncidents(prev => [{ id: `INC-${Date.now().toString().slice(-3)}`, time: new Date().toLocaleTimeString(), name: 'DatabaseResetRequest', status: 'BLOCKED', node: 'DB-CLUSTER-PRIM' }, ...prev]);
+      alertPayload.details = `Rogue action: request 'delete_database' on service [${activeNode.name}]`;
     }
 
     try {
-      if (targetEndpoint) await fetch(targetEndpoint, { method: 'POST' });
+      if (targetEndpoint && selectedNode === 'aship-target-app') {
+        await fetch(targetEndpoint, { method: 'POST' });
+      }
       await fetch('http://localhost:8000/webhook/alert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -375,15 +436,19 @@ function App() {
 
   const approveRemediation = async () => {
     if (!pendingAction) return;
-    addLog(`OPERATOR_RELEASE: Action ${pendingAction.action} signature granted.`, 'success');
+    addLog(`OPERATOR_RELEASE: Action ${pendingAction.action} authorized by operator.`, 'success');
     setNodeState('remediating');
+    setOodaStage(5);
     try {
       if (pendingAction.action === 'restart_pod' || pendingAction.action === 'rollback_deployment') {
         await fetch('http://localhost:5001/chaos/reset', { method: 'POST' });
         playChime();
         setNodeState('resolved');
         addToast("REMEDIATION APPROVED", "Operator signature authorized pod restart.", "success");
-        setTimeout(() => setNodeState('healthy'), 1000);
+        setTimeout(() => {
+          setNodeState('healthy');
+          setOodaStage(0);
+        }, 1200);
       }
     } catch (e) {
       addLog(`RELEASE_ERR: ${e.message}`, 'error');
@@ -414,15 +479,13 @@ function App() {
     setAiPromptText('');
   };
 
-  const systemStatus = telemetry.status === 'unhealthy' ? 'CRITICAL' : 'healthy';
-  const systemHealthScore = telemetry.status === 'unhealthy' ? 42.8 : 98.4;
   const memoryUsage = targetConnected ? Math.round(telemetry.memory_percent) : 0;
   const cpuUsage = targetConnected ? Math.round(telemetry.cpu_percent) : 0;
 
   const getSvgPath = (key) => {
     if (metricHistory.length < 2) return "";
     const width = 280;
-    const height = 55;
+    const height = 45;
     const points = metricHistory.map((pt, idx) => {
       const x = (idx / (metricHistory.length - 1)) * width;
       const val = pt[key] || 0;
@@ -433,15 +496,15 @@ function App() {
   };
 
   return (
-    <div className="crt-overlay radar-grid min-h-screen bg-[#0A1128] text-[#00D4FF] flex flex-col font-mono select-none relative overflow-x-hidden">
+    <div className="min-h-screen bg-[#080c1d] text-slate-100 flex flex-col font-sans select-none relative overflow-x-hidden">
       
-      {/* Slide-In Toast Notifications (Top-Right) */}
+      {/* Toast Notifications (Top-Right) */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
         {toasts.map(toast => (
-          <div key={toast.id} className="animate-toast-slide warroom-panel bg-[#0A1128]/95 border border-[#00E699] p-3.5 rounded-lg shadow-2xl flex items-start gap-3 text-xs">
-            <CheckCircle className="w-5 h-5 text-[#00E699] shrink-0 mt-0.5" />
+          <div key={toast.id} className="animate-toast-slide aship-figma-card border border-emerald-500/40 p-4 rounded-xl shadow-2xl flex items-start gap-3 text-xs bg-[#0b1026]/95">
+            <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
             <div>
-              <h4 className="font-bold text-[#00E699] uppercase tracking-wider">{toast.title}</h4>
+              <h4 className="font-bold text-emerald-400 uppercase tracking-wider">{toast.title}</h4>
               <p className="text-slate-300 text-[11px] mt-0.5 leading-normal">{toast.message}</p>
             </div>
             <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} className="text-slate-500 hover:text-white">
@@ -451,335 +514,352 @@ function App() {
         ))}
       </div>
 
-      {/* TOP STATUS BAR & INCIDENT TIMELINE SCRUBBER */}
-      <header className="bg-[#070D1E]/95 border-b border-[#00D4FF]/30 px-6 py-3 flex flex-col gap-2.5 sticky top-0 z-40 backdrop-blur-xl">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-[#00D4FF]/10 border border-[#00D4FF]/40 rounded glow-cyan">
-              <Radio className="w-5 h-5 text-[#00D4FF] animate-pulse" />
-            </div>
-            <div>
-              <h1 className="font-bold text-base tracking-wider text-white flex items-center gap-2">
-                ASHIP // NASA WAR ROOM MISSION CONTROL
-              </h1>
-              <p className="text-[10px] text-slate-400 font-sans">Autonomous Infrastructure Remediation Console</p>
-            </div>
+      {/* FIGMA ENTERPRISE HEADER & CLUSTER SWITCHER */}
+      <header className="bg-[#0b1026]/90 border-b border-slate-800/80 px-6 py-3.5 flex items-center justify-between sticky top-0 z-40 backdrop-blur-xl">
+        
+        {/* Brand & Subtitle */}
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-xl text-indigo-400 shadow-lg shadow-indigo-500/10">
+            <Zap className="w-5 h-5" />
           </div>
-
-          {/* System Health Score numeric % */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 bg-[#0A1128] border border-[#00D4FF]/30 px-4 py-1.5 rounded">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">OVERALL SYSTEM HEALTH</span>
-              <span className={`text-xl font-extrabold font-mono ${systemStatus === 'healthy' ? 'text-[#00E699]' : 'text-[#FF3B5C] animate-pulse'}`}>
-                {systemHealthScore}%
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="font-extrabold text-base tracking-tight text-white font-sans">ASHIP</h1>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 tracking-wider">
+                AUTONOMOUS SRE PROTOCOL
               </span>
             </div>
+            <p className="text-[11px] text-slate-400 font-normal">Self-Healing Infrastructure Control Center</p>
+          </div>
+        </div>
 
-            {/* Service Badges */}
-            <div className="hidden xl:flex items-center gap-3 text-xs">
-              <div className="flex items-center gap-1.5 bg-[#0A1128] px-3 py-1 rounded border border-[#00D4FF]/20">
-                <span className={`w-2 h-2 rounded-full ${targetConnected ? 'bg-[#00E699] glow-emerald' : 'bg-[#FF3B5C] glow-red'}`} />
-                <span className="text-slate-400">TARGET:</span>
-                <span className="text-white font-bold">5001</span>
-              </div>
-              <div className="flex items-center gap-1.5 bg-[#0A1128] px-3 py-1 rounded border border-[#00D4FF]/20">
-                <span className={`w-2 h-2 rounded-full ${agentConnected ? 'bg-[#00E699] glow-emerald' : 'bg-[#FF3B5C] glow-red'}`} />
-                <span className="text-slate-400">AGENT:</span>
-                <span className="text-white font-bold">8000</span>
-              </div>
-              <div className="flex items-center gap-1.5 bg-[#0A1128] px-3 py-1 rounded border border-[#00D4FF]/20">
-                <Shield className="w-3.5 h-3.5 text-[#00D4FF]" />
-                <span className="text-slate-400">OPA REGO:</span>
-                <span className="text-[#00D4FF] font-bold">ACTIVE</span>
-              </div>
-            </div>
-
-            {/* Audio Toggle */}
-            <button 
-              onClick={() => setAudioEnabled(!audioEnabled)}
-              className={`p-1.5 rounded border transition-all text-xs flex items-center gap-1 ${
-                audioEnabled ? 'bg-[#00D4FF]/20 border-[#00D4FF] text-[#00D4FF]' : 'bg-white/5 border-white/10 text-slate-500'
+        {/* Figma Cluster Environment Pill Tabs */}
+        <div className="hidden md:flex items-center bg-[#080c1d] border border-slate-800 p-1 rounded-xl gap-1">
+          {['Local-Minikube', 'Staging-EU', 'Prod-US'].map(env => (
+            <button
+              key={env}
+              onClick={() => setClusterEnv(env)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                clusterEnv === env 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
               }`}
             >
-              {audioEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              {env}
             </button>
-          </div>
+          ))}
         </div>
 
-        {/* Horizontal Incident History Timeline Scrubber */}
-        <div className="flex items-center gap-3 bg-[#0A1128]/80 border border-[#00D4FF]/20 px-3 py-1.5 rounded">
-          <Clock className="w-3.5 h-3.5 text-[#00D4FF] shrink-0" />
-          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider shrink-0">INCIDENT TIMELINE SCRUBBER</span>
-          <input 
-            type="range"
-            min="0"
-            max="100"
-            value={timelineValue}
-            onChange={(e) => setTimelineValue(e.target.value)}
-            className="w-full h-1 bg-[#00D4FF]/20 rounded-lg appearance-none cursor-pointer accent-[#00D4FF]"
-          />
-          <span className="text-[10px] font-mono text-[#00D4FF] shrink-0">{hudTime}</span>
+        {/* Live Service Badges & Mode Controller */}
+        <div className="flex items-center gap-4">
+          
+          <div className="hidden lg:flex items-center gap-3 text-xs font-mono">
+            <div className="flex items-center gap-1.5 bg-[#080c1d] px-3 py-1.5 rounded-lg border border-slate-800">
+              <span className={`w-2 h-2 rounded-full ${targetConnected ? 'bg-emerald-400 shadow-sm shadow-emerald-400' : 'bg-red-500'}`} />
+              <span className="text-slate-400">TARGET:</span>
+              <span className="text-white font-bold">5001</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-[#080c1d] px-3 py-1.5 rounded-lg border border-slate-800">
+              <span className={`w-2 h-2 rounded-full ${agentConnected ? 'bg-emerald-400 shadow-sm shadow-emerald-400' : 'bg-red-500'}`} />
+              <span className="text-slate-400">AGENT:</span>
+              <span className="text-white font-bold">8000</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-[#080c1d] px-3 py-1.5 rounded-lg border border-slate-800">
+              <Shield className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="text-slate-400">OPA REGO:</span>
+              <span className="text-indigo-400 font-bold">ACTIVE</span>
+            </div>
+          </div>
+
+          {/* Autopilot Mode Switcher */}
+          <button 
+            onClick={() => setAutopilot(!autopilot)}
+            className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all flex items-center gap-2 ${
+              autopilot ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+            }`}
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span>{autopilot ? 'AUTOPILOT: ON' : 'RELEASE MODE'}</span>
+          </button>
+
+          {/* UTC Clock */}
+          <div className="hidden xl:flex items-center gap-1.5 text-xs text-slate-400 font-mono">
+            <Clock className="w-3.5 h-3.5 text-indigo-400" />
+            <span>{hudTime}</span>
+          </div>
+
         </div>
+
       </header>
 
-      {/* MAIN MISSION CONTROL GRID */}
+      {/* 3-COLUMN FIGMA SAAS DASHBOARD GRID */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10 pb-24">
         
-        {/* CENTER TOPOLOGY MAP (NODE GRAPH SVG) - 6 cols */}
-        <section className="lg:col-span-6 flex flex-col space-y-6">
+        {/* COLUMN 1: MICROSERVICES MESH & CHAOS FAULT ENGINE (3 cols) */}
+        <section className="lg:col-span-3 flex flex-col space-y-6">
           
-          <div className={`warroom-panel p-5 flex flex-col space-y-4 ${telemetry.status === 'unhealthy' ? 'panel-pulsing-alert' : ''}`}>
-            <div className="flex items-center justify-between border-b border-[#00D4FF]/20 pb-3">
+          {/* Microservices Topology Selector */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <Network className="w-4.5 h-4.5 text-[#00D4FF]" />
-                <h2 className="font-bold text-sm text-white tracking-wider uppercase">CENTRAL INFRASTRUCTURE TOPOLOGY MAP</h2>
+                <Network className="w-4.5 h-4.5 text-indigo-400" />
+                <h2 className="font-bold text-xs text-white uppercase tracking-wider">MICROSERVICES TOPOLOGY</h2>
               </div>
-              <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded border uppercase ${
-                nodeState === 'alert' ? 'bg-[#FF3B5C]/20 border-[#FF3B5C] text-[#FF3B5C] animate-pulse' :
-                nodeState === 'remediating' ? 'bg-[#FFB800]/20 border-[#FFB800] text-[#FFB800]' :
-                'bg-[#00E699]/10 border-[#00E699]/30 text-[#00E699]'
-              }`}>
-                {nodeState}
-              </span>
+              <button
+                onClick={() => setShowRegisterModal(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 shadow-md shadow-indigo-600/20"
+              >
+                <Plus className="w-3 h-3" />
+                <span>CONNECT APP</span>
+              </button>
             </div>
 
-            {/* Large Topology Map SVG Canvas */}
-            <div className="bg-[#050A18] border border-[#00D4FF]/20 rounded p-4 relative overflow-hidden flex items-center justify-center min-h-[300px]">
-              
-              <svg className="w-full h-[280px]" viewBox="0 0 540 280">
-                {/* Connecting Lines between Topology Nodes */}
-                <line x1="90" y1="140" x2="270" y2="140" stroke="#00D4FF" strokeWidth="1.5" className="ooda-flow-dash" />
-                <line x1="270" y1="140" x2="430" y2="80" stroke="#00D4FF" strokeWidth="1.5" className="ooda-flow-dash" />
-                <line x1="270" y1="140" x2="430" y2="200" stroke="#00D4FF" strokeWidth="1.5" className="ooda-flow-dash" />
-                <line x1="270" y1="140" x2="270" y2="240" stroke="#00D4FF" strokeWidth="1.5" strokeDasharray="4 4" />
-
-                {/* Node 1: GATEWAY-NODE-01 */}
-                <g transform="translate(90, 140)">
-                  <circle r="18" fill="#0A1128" stroke="#00D4FF" strokeWidth="2" className="glow-cyan" />
-                  <text y="4" textAnchor="middle" fill="#00D4FF" className="text-[8px] font-bold font-mono">GW</text>
-                  <text y="32" textAnchor="middle" fill="#94a3b8" className="text-[9px] font-mono">GATEWAY-01</text>
-                </g>
-
-                {/* Node 2: TARGET-APP-POD (Main Interactive Healing Target Node!) */}
-                <g transform="translate(270, 140)" className={nodeState === 'resolved' ? 'animate-node-snap' : ''}>
-                  {/* Alert radar-sweep ring */}
-                  {nodeState === 'alert' && (
-                    <circle r="14" fill="none" stroke="#FF3B5C" className="animate-radar-sweep" />
-                  )}
-
-                  {/* Auto-remediation spinning ring */}
-                  {nodeState === 'remediating' && (
-                    <circle r="26" fill="none" stroke="#FFB800" strokeWidth="2" strokeDasharray="12 6" className="animate-spin-ring" />
-                  )}
-
-                  {/* Node Circle */}
-                  <circle r="20" className={`transition-all duration-500 ${
-                    nodeState === 'alert' ? 'fill-[#FF3B5C]/20 stroke-[#FF3B5C] stroke-2 glow-red' :
-                    nodeState === 'remediating' ? 'fill-[#FFB800]/20 stroke-[#FFB800] stroke-2 glow-amber' :
-                    nodeState === 'resolved' ? 'fill-[#00E699]/30 stroke-[#00E699] stroke-2 glow-emerald' :
-                    'fill-[#0A1128] stroke-[#00D4FF] stroke-2 glow-cyan'
-                  }`} />
-
-                  <Zap className={`w-5 h-5 -translate-x-2.5 -translate-y-2.5 ${
-                    nodeState === 'alert' ? 'text-[#FF3B5C] animate-bounce' :
-                    nodeState === 'remediating' ? 'text-[#FFB800] animate-spin' :
-                    nodeState === 'resolved' ? 'text-[#00E699]' : 'text-[#00D4FF]'
-                  }`} />
-
-                  <text y="36" textAnchor="middle" fill={nodeState === 'alert' ? '#FF3B5C' : '#white'} className="text-[10px] font-bold font-mono">
-                    TARGET-APP-POD
-                  </text>
-                </g>
-
-                {/* Node 3: DB-CLUSTER-PRIM */}
-                <g transform="translate(430, 80)">
-                  <circle r="16" fill="#0A1128" stroke="#00D4FF" strokeWidth="1.5" />
-                  <Database className="w-4 h-4 -translate-x-2 -translate-y-2 text-[#00D4FF]" />
-                  <text y="30" textAnchor="middle" fill="#94a3b8" className="text-[9px] font-mono">PROD-DB</text>
-                </g>
-
-                {/* Node 4: REDIS-CACHE-01 */}
-                <g transform="translate(430, 200)">
-                  <circle r="16" fill="#0A1128" stroke="#00D4FF" strokeWidth="1.5" />
-                  <Layers className="w-4 h-4 -translate-x-2 -translate-y-2 text-[#00D4FF]" />
-                  <text y="30" textAnchor="middle" fill="#94a3b8" className="text-[9px] font-mono">REDIS-CACHE</text>
-                </g>
-
-                {/* Node 5: AI-AGENT-REASONER */}
-                <g transform="translate(270, 240)">
-                  <circle r="16" fill="#0A1128" stroke="#00D4FF" strokeWidth="1.5" />
-                  <Cpu className="w-4 h-4 -translate-x-2 -translate-y-2 text-[#00D4FF]" />
-                  <text y="28" textAnchor="middle" fill="#94a3b8" className="text-[9px] font-mono">AI-AGENT-8000</text>
-                </g>
-              </svg>
-
-            </div>
-
-            <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
-              <span>mesh_protocol: gRPC/v2</span>
-              <span>packet_flow: ACTIVE</span>
+            <div className="space-y-2">
+              {topologyNodes.map(node => (
+                <button
+                  key={node.id}
+                  onClick={() => setSelectedNode(node.id)}
+                  className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between ${
+                    selectedNode === node.id 
+                      ? 'bg-indigo-600/15 border-indigo-500/50 shadow-md shadow-indigo-600/10' 
+                      : 'bg-slate-900/40 border-slate-800/60 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${
+                      node.status === 'Unhealthy' ? 'bg-red-500/10 text-red-400' : 'bg-slate-800 text-indigo-400'
+                    }`}>
+                      <Server className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="font-bold text-xs text-white block truncate max-w-[120px]">{node.name}</span>
+                      <span className="text-[10px] text-slate-400">{node.type} • Port {node.port}</span>
+                    </div>
+                  </div>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase ${
+                    node.status === 'Unhealthy' ? 'bg-red-500/10 border-red-500/30 text-red-400 animate-pulse' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  }`}>
+                    {node.status}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Fault Injector Panel */}
-          <div className="warroom-panel p-5 flex flex-col space-y-3">
-            <div className="flex items-center justify-between border-b border-[#00D4FF]/20 pb-2">
+          {/* Synthetic Fault Injector Engine */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-[#FFB800]" />
-                <h3 className="font-bold text-xs text-white uppercase">SYNTHETIC FAULT INJECTION ENGINE</h3>
+                <ShieldAlert className="w-4.5 h-4.5 text-amber-400" />
+                <h3 className="font-bold text-xs text-white uppercase tracking-wider">SYNTHETIC FAULT ENGINE</h3>
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-3">
               <button 
                 onClick={() => injectFault('memory-leak')}
                 disabled={isSimulating || !targetConnected}
-                className="bg-[#FF3B5C]/10 border border-[#FF3B5C]/40 hover:bg-[#FF3B5C]/20 text-[#FF3B5C] p-2.5 rounded text-[10px] font-bold uppercase transition-all flex flex-col items-center gap-1.5 disabled:opacity-40 glow-red"
+                className="w-full bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-400 p-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between disabled:opacity-40"
               >
-                <Database className="w-4 h-4" />
-                <span>Memory Leak</span>
+                <div className="flex items-center gap-2.5">
+                  <Database className="w-4 h-4" />
+                  <span>Inject RAM Memory Leak</span>
+                </div>
+                <ChevronRight className="w-4 h-4" />
               </button>
 
               <button 
                 onClick={() => injectFault('cpu-spike')}
                 disabled={isSimulating || !targetConnected}
-                className="bg-[#FFB800]/10 border border-[#FFB800]/40 hover:bg-[#FFB800]/20 text-[#FFB800] p-2.5 rounded text-[10px] font-bold uppercase transition-all flex flex-col items-center gap-1.5 disabled:opacity-40 glow-amber"
+                className="w-full bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 p-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between disabled:opacity-40"
               >
-                <Cpu className="w-4 h-4" />
-                <span>CPU Saturation</span>
+                <div className="flex items-center gap-2.5">
+                  <Cpu className="w-4 h-4" />
+                  <span>Saturate CPU Cores</span>
+                </div>
+                <ChevronRight className="w-4 h-4" />
               </button>
 
               <button 
                 onClick={() => injectFault('db-purge')}
                 disabled={isSimulating || !agentConnected}
-                className="bg-[#00D4FF]/10 border border-[#00D4FF]/40 hover:bg-[#00D4FF]/20 text-[#00D4FF] p-2.5 rounded text-[10px] font-bold uppercase transition-all flex flex-col items-center gap-1.5 disabled:opacity-40 glow-cyan"
+                className="w-full bg-indigo-500/10 border border-indigo-500/30 hover:bg-indigo-500/20 text-indigo-400 p-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between disabled:opacity-40"
               >
-                <Shield className="w-4 h-4" />
-                <span>DB Purge (OPA)</span>
+                <div className="flex items-center gap-2.5">
+                  <Shield className="w-4 h-4" />
+                  <span>Test Rogue DB Purge (OPA)</span>
+                </div>
+                <ChevronRight className="w-4 h-4" />
               </button>
             </div>
           </div>
 
         </section>
 
-        {/* SURROUNDING TELEMETRY PANELS - LEFT (3 cols) */}
-        <section className="lg:col-span-3 flex flex-col space-y-6">
+        {/* COLUMN 2: REAL-TIME TELEMETRY & 5-STAGE OODA DECISION PIPELINE (5 cols) */}
+        <section className="lg:col-span-5 flex flex-col space-y-6">
           
-          {/* Latency & Error Rates */}
-          <div className="warroom-panel p-4 flex flex-col space-y-4">
-            <div className="flex items-center justify-between border-b border-[#00D4FF]/20 pb-2">
+          {/* Real-Time Metrics & Waveforms Card */}
+          <div className={`aship-figma-card p-5 flex flex-col space-y-4 ${
+            telemetry.status === 'unhealthy' ? 'aship-card-alert' : ''
+          }`}>
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4 text-[#00D4FF]" />
-                <h3 className="font-bold text-xs text-white uppercase">LATENCY & THROUGHPUT</h3>
+                <Activity className="w-4.5 h-4.5 text-indigo-400" />
+                <h2 className="font-bold text-xs text-white uppercase tracking-wider">CONTAINER TELEMETRY & WAVEFORMS</h2>
+              </div>
+              <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border uppercase ${
+                telemetry.status === 'unhealthy' ? 'bg-red-500/10 border-red-500/30 text-red-400 animate-pulse' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              }`}>
+                {telemetry.status}
+              </span>
+            </div>
+
+            {/* RAM & CPU Gauges */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-xl space-y-2">
+                <div className="flex justify-between text-xs font-bold">
+                  <span className="text-slate-400">RAM (128Mi)</span>
+                  <span className={telemetry.memory_state === 'critical' ? 'text-red-400' : 'text-indigo-400'}>{memoryUsage}%</span>
+                </div>
+                <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                  <div className={`h-full transition-all duration-500 ${
+                    telemetry.memory_state === 'critical' ? 'bg-red-500' : 'bg-indigo-500'
+                  }`} style={{ width: `${memoryUsage}%` }} />
+                </div>
+              </div>
+
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-xl space-y-2">
+                <div className="flex justify-between text-xs font-bold">
+                  <span className="text-slate-400">CPU Saturation</span>
+                  <span className={telemetry.cpu_state === 'critical' ? 'text-amber-400' : 'text-indigo-400'}>{cpuUsage}%</span>
+                </div>
+                <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                  <div className={`h-full transition-all duration-500 ${
+                    telemetry.cpu_state === 'critical' ? 'bg-amber-500' : 'bg-indigo-500'
+                  }`} style={{ width: `${cpuUsage}%` }} />
+                </div>
               </div>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Target Response:</span>
-                <span className="text-white font-bold">12.4 ms</span>
+            {/* OpenTelemetry Trend Curves */}
+            <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl relative overflow-hidden">
+              <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mb-2">
+                <span>OPENTELEMETRY RAM WAVEFORM</span>
+                <span className="text-indigo-400">{hudTime}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Packet Throughput:</span>
-                <span className="text-[#00D4FF] font-bold">8.4 k/s</span>
-              </div>
-            </div>
-
-            {/* Waveform 1 */}
-            <div className="bg-[#050A18] border border-[#00D4FF]/20 p-2 rounded">
-              <div className="text-[8px] text-slate-400 uppercase font-bold mb-1">RAM Waveform</div>
-              <svg className="w-full h-12" viewBox="0 0 280 55" preserveAspectRatio="none">
-                <path d={getSvgPath('mem')} fill="none" stroke="#00D4FF" strokeWidth="1.8" />
-              </svg>
-            </div>
-
-            {/* Waveform 2 */}
-            <div className="bg-[#050A18] border border-[#00D4FF]/20 p-2 rounded">
-              <div className="text-[8px] text-slate-400 uppercase font-bold mb-1">CPU Waveform</div>
-              <svg className="w-full h-12" viewBox="0 0 280 55" preserveAspectRatio="none">
-                <path d={getSvgPath('cpu')} fill="none" stroke="#FFB800" strokeWidth="1.8" />
+              <svg className="w-full h-12" viewBox="0 0 280 45" preserveAspectRatio="none">
+                <path d={getSvgPath('mem')} fill="none" stroke="#6366f1" strokeWidth="2" />
               </svg>
             </div>
           </div>
 
-          {/* Memory & CPU Gauges */}
-          <div className="warroom-panel p-4 flex flex-col space-y-4">
-            <div className="flex items-center justify-between border-b border-[#00D4FF]/20 pb-2">
-              <h3 className="font-bold text-xs text-white uppercase">ERROR RATES & SATURATION</h3>
+          {/* 5-STAGE OODA DECISION PIPELINE VISUALIZER */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4.5 h-4.5 text-indigo-400" />
+                <h3 className="font-bold text-xs text-white uppercase tracking-wider">5-STAGE OODA DECISION PIPELINE</h3>
+              </div>
+              <span className="text-[10px] text-slate-400 font-mono">Cycle: Autonomous</span>
             </div>
 
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs font-bold">
-                  <span className="text-slate-400">RAM (128Mi)</span>
-                  <span className={telemetry.memory_state === 'critical' ? 'text-[#FF3B5C]' : 'text-[#00D4FF]'}>{memoryUsage}%</span>
-                </div>
-                <div className="h-2 bg-[#050A18] rounded border border-[#00D4FF]/20 overflow-hidden">
-                  <div className={`h-full ${telemetry.memory_state === 'critical' ? 'bg-[#FF3B5C]' : 'bg-[#00D4FF]'}`} style={{ width: `${memoryUsage}%` }} />
-                </div>
-              </div>
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                { stage: 1, label: 'Observe', icon: Eye, desc: 'Alert Ingestion' },
+                { stage: 2, label: 'Orient', icon: Compass, desc: 'Telemetry Context' },
+                { stage: 3, label: 'Decide', icon: Cpu, desc: 'LLM Reasoning' },
+                { stage: 4, label: 'Validate', icon: Shield, desc: 'OPA Rego Policy' },
+                { stage: 5, label: 'Act', icon: Zap, desc: 'Self-Healing' }
+              ].map(item => {
+                const IconComp = item.icon;
+                const isActive = oodaStage === item.stage;
+                const isPassed = oodaStage > item.stage;
 
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs font-bold">
-                  <span className="text-slate-400">CPU Saturation</span>
-                  <span className={telemetry.cpu_state === 'critical' ? 'text-[#FFB800]' : 'text-[#00D4FF]'}>{cpuUsage}%</span>
-                </div>
-                <div className="h-2 bg-[#050A18] rounded border border-[#00D4FF]/20 overflow-hidden">
-                  <div className={`h-full ${telemetry.cpu_state === 'critical' ? 'bg-[#FFB800]' : 'bg-[#00D4FF]'}`} style={{ width: `${cpuUsage}%` }} />
-                </div>
-              </div>
+                return (
+                  <div 
+                    key={item.stage}
+                    className={`p-3 rounded-xl border text-center flex flex-col items-center gap-1.5 transition-all ${
+                      isActive 
+                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-lg shadow-indigo-500/20 animate-pulse' 
+                        : isPassed 
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                        : 'bg-slate-900/40 border-slate-800 text-slate-500'
+                    }`}
+                  >
+                    <IconComp className="w-4 h-4" />
+                    <span className="font-bold text-[11px] block">{item.label}</span>
+                    <span className="text-[9px] text-slate-400 leading-none">{item.desc}</span>
+                  </div>
+                );
+              })}
             </div>
+
+            {/* Matched SRE Runbook Inspector */}
+            <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-indigo-400" />
+                <span className="text-slate-400">RAG SRE Runbook:</span>
+              </div>
+              <span className="font-bold text-white font-mono">{lastMatchedRunbook}</span>
+            </div>
+
           </div>
 
         </section>
 
-        {/* SURROUNDING TELEMETRY PANELS - RIGHT (3 cols) */}
-        <section className="lg:col-span-3 flex flex-col space-y-6">
+        {/* COLUMN 3: AI DIAGNOSTICS STREAM & HMAC AUDIT INSPECTOR (4 cols) */}
+        <section className="lg:col-span-4 flex flex-col space-y-6">
           
-          {/* Active Incidents & Healing Queue */}
-          <div className="warroom-panel p-4 flex flex-col space-y-3">
-            <div className="flex items-center justify-between border-b border-[#00D4FF]/20 pb-2">
-              <h3 className="font-bold text-xs text-white uppercase">ACTIVE INCIDENTS QUEUE</h3>
+          {/* HMAC-SHA256 Cryptographic Audit Inspector Card */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Key className="w-4.5 h-4.5 text-indigo-400" />
+                <h3 className="font-bold text-xs text-white uppercase tracking-wider">HMAC-SHA256 AUDIT SIGNATURE</h3>
+              </div>
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400">
+                VERIFIED
+              </span>
             </div>
 
-            <div className="space-y-2 text-xs">
-              {incidents.slice(0, 3).map(inc => (
-                <div key={inc.id} className="bg-[#050A18] border border-[#00D4FF]/20 p-2.5 rounded flex items-center justify-between">
-                  <div>
-                    <span className="font-bold text-white block text-[11px]">{inc.name}</span>
-                    <span className="text-[9px] text-slate-400">{inc.node} • {inc.time}</span>
-                  </div>
-                  <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border ${
-                    inc.status === 'ACTIVE' ? 'bg-[#FF3B5C]/20 border-[#FF3B5C] text-[#FF3B5C]' :
-                    inc.status === 'BLOCKED' ? 'bg-[#FFB800]/20 border-[#FFB800] text-[#FFB800]' :
-                    'bg-[#00E699]/20 border-[#00E699] text-[#00E699]'
-                  }`}>
-                    {inc.status}
-                  </span>
-                </div>
-              ))}
+            <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl font-mono text-[10px] space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-slate-500">DIGITAL HASH:</span>
+                <span className="text-indigo-400 font-bold truncate max-w-[200px]">{lastHmacSignature}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">POLICY EVAL:</span>
+                <span className="text-emerald-400 font-bold">OPA_REGO_PASSED</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">LLM CONFIDENCE:</span>
+                <span className="text-white font-bold">0.95 (High)</span>
+              </div>
             </div>
           </div>
 
-          {/* AI Diagnostics Terminal Stream */}
-          <div className="warroom-panel p-4 flex flex-col space-y-3 flex-1 min-h-[300px]">
-            <div className="flex items-center justify-between border-b border-[#00D4FF]/20 pb-2">
+          {/* AI Log Terminal Stream */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-3 flex-1 min-h-[320px]">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <TerminalIcon className="w-4 h-4 text-[#00D4FF]" />
-                <h3 className="font-bold text-xs text-white uppercase">AI LOGS STREAM</h3>
+                <TerminalIcon className="w-4.5 h-4.5 text-indigo-400" />
+                <h3 className="font-bold text-xs text-white uppercase tracking-wider">REAL-TIME LOG STREAM</h3>
               </div>
-              <button onClick={clearLogs} className="text-[9px] text-slate-500 hover:text-white uppercase font-bold">CLEAR</button>
+              <button onClick={clearLogs} className="text-[10px] text-slate-500 hover:text-white font-bold uppercase">
+                CLEAR
+              </button>
             </div>
 
-            <div className="bg-[#050A18] border border-[#00D4FF]/20 p-3 rounded font-mono text-[9.5px] leading-relaxed text-[#00D4FF]/80 warroom-scrollbar overflow-y-auto max-h-[280px] flex flex-col gap-1.5">
+            <div className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl font-mono text-[10px] leading-relaxed aship-scrollbar overflow-y-auto max-h-[300px] flex flex-col gap-2">
               {logs.map((log) => (
-                <div key={log.id} className="whitespace-pre-wrap flex items-start gap-1.5 border-b border-white/5 pb-0.5">
-                  <span className="text-slate-500">[{log.time}]</span>
+                <div key={log.id} className="whitespace-pre-wrap flex items-start gap-2 border-b border-slate-900 pb-1">
+                  <span className="text-slate-600 shrink-0">[{log.time}]</span>
                   <span className={
-                    log.type === 'error' ? 'text-[#FF3B5C] font-bold' :
-                    log.type === 'warning' ? 'text-[#FFB800]' :
+                    log.type === 'error' ? 'text-red-400 font-bold' :
+                    log.type === 'warning' ? 'text-amber-400' :
                     log.type === 'shield' ? 'text-indigo-400' :
-                    log.type === 'success' ? 'text-[#00E699] font-bold' : 'text-slate-300'
+                    log.type === 'success' ? 'text-emerald-400 font-bold' : 'text-slate-300'
                   }>
                     {log.text}
                   </span>
@@ -793,15 +873,85 @@ function App() {
 
       </main>
 
+      {/* Dynamic Custom Software Registration Modal */}
+      {showRegisterModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="aship-figma-card bg-[#0b1026] border border-indigo-500/40 p-6 rounded-2xl max-w-lg w-full shadow-2xl space-y-5 relative">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5 text-indigo-400">
+                <Link className="w-5 h-5" />
+                <h3 className="font-bold text-sm text-white uppercase tracking-wider">CONNECT CUSTOM SOFTWARE SERVICE</h3>
+              </div>
+              <button onClick={() => setShowRegisterModal(false)} className="text-slate-500 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRegisterServiceSubmit} className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="text-slate-400 font-bold uppercase text-[10px]">Service Name / Workload Identifier</label>
+                <input 
+                  type="text"
+                  required
+                  placeholder="e.g. payment-service-v1"
+                  value={regServiceName}
+                  onChange={(e) => setRegServiceName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-400 font-bold uppercase text-[10px]">Telemetry & Health URL (/health or /metrics)</label>
+                <input 
+                  type="url"
+                  required
+                  placeholder="http://your-app:8080/health"
+                  value={regHealthUrl}
+                  onChange={(e) => setRegHealthUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-400 font-bold uppercase text-[10px]">Remediation Webhook URL (/reset or K8s API)</label>
+                <input 
+                  type="url"
+                  placeholder="http://your-app:8080/reset"
+                  value={regRemediationUrl}
+                  onChange={(e) => setRegRemediationUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterModal(false)}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-2 rounded-xl shadow-lg shadow-indigo-600/30 uppercase text-xs"
+                >
+                  Register Software
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Manual Release Approval Prompt Modal if Autopilot is OFF */}
       {!autopilot && pendingAction && (
-        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 bg-[#070D1E] border border-[#FFB800] p-4 rounded shadow-2xl z-50 flex items-center gap-4 glow-amber">
-          <AlertTriangle className="w-6 h-6 text-[#FFB800] animate-bounce shrink-0" />
-          <div>
-            <h4 className="font-bold text-xs text-[#FFB800] uppercase">REMEDIATION ACTION AUTHORIZATION NEEDED</h4>
-            <p className="text-[11px] text-slate-300 mt-0.5">Proposed action: <code className="text-white font-bold">{pendingAction.action}</code></p>
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 bg-[#0b1026] border border-amber-500 p-5 rounded-2xl shadow-2xl z-50 flex items-center gap-5 max-w-md w-full">
+          <AlertTriangle className="w-8 h-8 text-amber-400 animate-bounce shrink-0" />
+          <div className="flex-1">
+            <h4 className="font-bold text-xs text-amber-400 uppercase tracking-wider">OPERATOR SIGNATURE NEEDED</h4>
+            <p className="text-xs text-slate-300 mt-1">Proposed action: <code className="text-white font-bold font-mono">{pendingAction.action}</code></p>
           </div>
-          <button onClick={approveRemediation} className="bg-[#FFB800] text-[#0A1128] font-bold py-1.5 px-4 rounded text-xs uppercase hover:bg-yellow-400">
+          <button onClick={approveRemediation} className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold py-2 px-4 rounded-xl text-xs uppercase shadow-lg shadow-amber-500/20">
             RELEASE SIGNATURE
           </button>
         </div>
@@ -810,35 +960,37 @@ function App() {
       {/* FLOATING AI COMMAND BAR (BOTTOM CENTER) */}
       <form 
         onSubmit={handleAiPromptSubmit}
-        className="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-full max-w-[560px] px-4 z-40"
+        className="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-full max-w-[620px] px-4 z-40"
       >
-        <div className="bg-[#070D1E]/95 border border-[#00D4FF]/40 p-1.5 flex items-center relative overflow-hidden rounded-full shadow-2xl backdrop-blur-2xl glow-cyan">
-          
-          <button
-            type="button"
-            onClick={toggleMic}
-            className={`p-2 rounded-full transition-all shrink-0 ${
-              micListening ? 'text-[#FF3B5C] bg-[#FF3B5C]/20 animate-pulse' : 'text-[#00D4FF] hover:text-white'
-            }`}
-          >
-            {micListening ? <Mic className="w-4 h-4 animate-pulse" /> : <Zap className="w-4 h-4" />}
-          </button>
-          
-          <input 
-            type="text"
-            value={aiPromptText}
-            onChange={(e) => setAiPromptText(e.target.value)}
-            placeholder="Command Mission Control (e.g., 'inject memory leak', 'restart pod')..."
-            className="w-full bg-transparent border-none outline-none text-xs text-white placeholder-slate-500 px-2.5 font-mono"
-          />
-          
-          <button 
-            type="submit"
-            className="bg-[#00D4FF] hover:bg-cyan-400 text-[#0A1128] font-bold py-1.5 px-4 rounded-full text-[10px] uppercase transition-all shrink-0 font-mono shadow-lg flex items-center gap-1.5"
-          >
-            <span>Execute</span>
-            <Send className="w-3 h-3" />
-          </button>
+        <div className="p-[1.5px] rounded-full aship-bar-gradient shadow-2xl">
+          <div className="bg-[#0b1026]/95 p-2 flex items-center rounded-full backdrop-blur-2xl">
+            
+            <button
+              type="button"
+              onClick={toggleMic}
+              className={`p-2.5 rounded-full transition-all shrink-0 ${
+                micListening ? 'text-red-400 bg-red-500/20 animate-pulse' : 'text-indigo-400 hover:text-white'
+              }`}
+            >
+              {micListening ? <Mic className="w-4 h-4 animate-pulse" /> : <Zap className="w-4 h-4" />}
+            </button>
+            
+            <input 
+              type="text"
+              value={aiPromptText}
+              onChange={(e) => setAiPromptText(e.target.value)}
+              placeholder="Command ASHIP (e.g., 'inject memory leak', 'restart container')..."
+              className="w-full bg-transparent border-none outline-none text-xs text-white placeholder-slate-500 px-3 font-sans"
+            />
+            
+            <button 
+              type="submit"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-5 rounded-full text-xs uppercase transition-all shrink-0 shadow-lg shadow-indigo-600/30 flex items-center gap-1.5"
+            >
+              <span>Execute</span>
+              <Send className="w-3 h-3" />
+            </button>
+          </div>
         </div>
       </form>
 
