@@ -304,7 +304,7 @@ function App() {
         addLog("SSE_SYNC: Connected to AI Agent log stream.", "success");
       };
       eventSource.onmessage = (event) => {
-        try:
+        try {
           const data = JSON.parse(event.data);
           if (data.type === 'system' && data.message === 'CONNECTED') {
             setAgentConnected(true);
