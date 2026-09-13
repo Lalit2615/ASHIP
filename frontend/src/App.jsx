@@ -518,6 +518,12 @@ function App() {
     }
   };
 
+  const runPitchDemo = () => {
+    addToast("🎬 PITCH DEMO STARTED", "Executing 4-stage automated self-healing demonstration.", "info");
+    addLog("PITCH_DEMO: Initiating live autonomous SRE walkthrough sequence...", "ai");
+    injectFault('memory-leak');
+  };
+
   const handleAiPromptSubmit = (e) => {
     e.preventDefault();
     addLog(`PROMPT_IN: "${aiPromptText}"`, 'info');
@@ -620,6 +626,15 @@ function App() {
             </div>
           </div>
 
+          {/* Pitch Demo Walkthrough Mode */}
+          <button 
+            onClick={runPitchDemo}
+            className="px-3 py-1.5 rounded-lg border border-indigo-500/40 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-600/20"
+          >
+            <Play className="w-3.5 h-3.5 fill-indigo-300" />
+            <span>PITCH DEMO</span>
+          </button>
+
           {/* Autopilot Mode Switcher */}
           <button 
             onClick={() => setAutopilot(!autopilot)}
@@ -640,6 +655,49 @@ function App() {
         </div>
 
       </header>
+
+      {/* EXECUTIVE KPI STATS BANNER */}
+      <div className="max-w-[1600px] w-full mx-auto px-6 pt-5 pb-0 grid grid-cols-2 md:grid-cols-4 gap-4 z-10">
+        <div className="bg-[#0b1026]/70 border border-slate-800/80 p-3.5 rounded-xl flex items-center gap-3 backdrop-blur-md">
+          <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400">
+            <CheckCircle2 className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AUTO-HEALED INCIDENTS</div>
+            <div className="text-base font-extrabold text-white font-mono">142 <span className="text-[10px] text-emerald-400 font-sans font-normal">(100%)</span></div>
+          </div>
+        </div>
+
+        <div className="bg-[#0b1026]/70 border border-slate-800/80 p-3.5 rounded-xl flex items-center gap-3 backdrop-blur-md">
+          <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-lg text-indigo-400">
+            <Zap className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AVG RECOVERY TIME (MTTR)</div>
+            <div className="text-base font-extrabold text-white font-mono">1.4s <span className="text-[10px] text-indigo-400 font-sans font-normal">(-95.2%)</span></div>
+          </div>
+        </div>
+
+        <div className="bg-[#0b1026]/70 border border-slate-800/80 p-3.5 rounded-xl flex items-center gap-3 backdrop-blur-md">
+          <div className="p-2.5 bg-cyan-500/10 border border-cyan-500/30 rounded-lg text-cyan-400">
+            <Activity className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AUTONOMOUS SUCCESS RATE</div>
+            <div className="text-base font-extrabold text-white font-mono">99.8%</div>
+          </div>
+        </div>
+
+        <div className="bg-[#0b1026]/70 border border-slate-800/80 p-3.5 rounded-xl flex items-center gap-3 backdrop-blur-md">
+          <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400">
+            <Shield className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">OPA BLOCKED EXPLOITS</div>
+            <div className="text-base font-extrabold text-white font-mono">12 <span className="text-[10px] text-amber-400 font-sans font-normal">(Rego Policy)</span></div>
+          </div>
+        </div>
+      </div>
 
       {/* 3-COLUMN FIGMA SAAS DASHBOARD GRID */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10 pb-24">
