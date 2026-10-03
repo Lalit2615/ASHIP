@@ -184,13 +184,13 @@ graph TD
         Discord["Discord Webhook Channel"]
     end
 
-    subgraph API & Control Layer (FastAPI - Port 8000)
+    subgraph API Control Layer
         Router["FastAPI Gateway Router"]
         SSE["SSE Event Stream Engine (/logs)"]
         OODA["OODA Loop Orchestrator"]
         RAG["SRE Runbook Knowledge Base"]
         HMAC["HMAC-SHA256 Audit Signer"]
-        DB[(SQLite Database - incidents.db)]
+        DB[("SQLite Database - incidents.db")]
     end
 
     subgraph Cognitive AI Layer
@@ -198,7 +198,7 @@ graph TD
         Pydantic["Pydantic Remediation Schema"]
     end
 
-    subgraph Security & Policy Layer
+    subgraph Security Layer
         OPA["Open Policy Agent Sandbox (Port 8181)"]
         Rego["aship-policy.rego Policy Rules"]
     end
@@ -208,21 +208,21 @@ graph TD
         CustomApp["Connected Custom Software (Port 8080)"]
     end
 
-    UI -->|HTTP / Webhooks| Router
-    Voice -->|Voice Commands| UI
+    UI --> Router
+    Voice --> UI
     Router --> SSE
     Router --> OODA
     OODA --> RAG
     OODA --> Groq
     Groq --> Pydantic
     OODA --> HMAC
-    OODA -->|Validate Action| OPA
+    OODA --> OPA
     OPA --> Rego
-    OODA -->|Store Incident| DB
-    OODA -->|Post Alert| Slack
-    OODA -->|Post Alert| Discord
-    OODA -->|Remediation Reset Signal| TargetApp
-    OODA -->|Remediation Reset Signal| CustomApp
+    OODA --> DB
+    OODA --> Slack
+    OODA --> Discord
+    OODA --> TargetApp
+    OODA --> CustomApp
 ```
 
 ---
@@ -230,36 +230,39 @@ graph TD
 ### 4.2 Use Case Diagram
 
 ```mermaid
-actor SRE as "SRE Engineer / Operator"
-actor System as "Prometheus / Telemetry Hook"
-actor LLM as "Llama 3.1 AI Engine"
-actor OPA_Actor as "OPA Security Sandbox"
+graph LR
+    subgraph Actors
+        SRE["SRE Engineer / Operator"]
+        System["Prometheus / Telemetry Hook"]
+        LLM["Llama 3.1 AI Engine"]
+        OPA_Actor["OPA Security Sandbox"]
+    end
 
-rectangle "ASHIP Platform" {
-    usecase UC1 as "Inject Synthetic Fault (Chaos)"
-    usecase UC2 as "Observe Telemetry & Ingest Alerts"
-    usecase UC3 as "Query SRE Runbooks (RAG)"
-    usecase UC4 as "Generate AI Remediation Plan"
-    usecase UC5 as "Validate Policy-as-Code (Rego)"
-    usecase UC6 as "Execute Autonomous Self-Healing"
-    usecase UC7 as "Log HMAC Signature & Persist DB"
-    usecase UC8 as "Dispatch Slack / Discord Notifications"
-    usecase UC9 as "Connect Custom Software (+ CONNECT APP)"
-    usecase UC10 as "Export Incident Post-Mortem Report"
-}
+    subgraph ASHIP Platform Usecases
+        UC1["Inject Synthetic Fault (Chaos)"]
+        UC2["Observe Telemetry & Ingest Alerts"]
+        UC3["Query SRE Runbooks (RAG)"]
+        UC4["Generate AI Remediation Plan"]
+        UC5["Validate Policy-as-Code (Rego)"]
+        UC6["Execute Autonomous Self-Healing"]
+        UC7["Log HMAC Signature & Persist DB"]
+        UC8["Dispatch Slack / Discord Notifications"]
+        UC9["Connect Custom Software (+ CONNECT APP)"]
+        UC10["Export Incident Post-Mortem Report"]
+    end
 
-SRE --> UC1
-SRE --> UC9
-SRE --> UC10
-System --> UC2
-UC2 --> UC3
-UC3 --> LLM
-LLM --> UC4
-UC4 --> OPA_Actor
-OPA_Actor --> UC5
-UC5 --> UC6
-UC6 --> UC7
-UC7 --> UC8
+    SRE --> UC1
+    SRE --> UC9
+    SRE --> UC10
+    System --> UC2
+    UC2 --> UC3
+    UC3 --> LLM
+    LLM --> UC4
+    UC4 --> OPA_Actor
+    OPA_Actor --> UC5
+    UC5 --> UC6
+    UC6 --> UC7
+    UC7 --> UC8
 ```
 
 ---
@@ -285,13 +288,13 @@ sequenceDiagram
     LLM-->>Engine: JSON { action: "restart_pod", target: "auth-service" }
     Engine->>Engine: Generate HMAC-SHA256 Digital Hash
     Engine->>UI: SSE Event: [DECIDE] Proposed Action + HMAC Hash
-    Engine->>OPA: POST /v1/data/aship/security/allow { input: decision }
+    Engine->>OPA: POST /v1/data/aship/security/allow
     OPA-->>Engine: JSON { result: true } (APPROVED)
     Engine->>UI: SSE Event: [VALIDATE] OPA Approved
-    Engine->>Target: POST /chaos/reset (Trigger Remediation Signal)
-    Target-->>Engine: JSON { status: "healed", memory_percent: 15.2% }
-    Engine->>DB: INSERT Incident Record into incidents.db
-    Engine->>UI: SSE Event: [ACT] Self-Healing Complete in 1.4s!
+    Engine->>Target: POST /chaos/reset (Trigger Reset)
+    Target-->>Engine: JSON { status: "healed" }
+    Engine->>DB: INSERT Record into incidents.db
+    Engine->>UI: SSE Event: [ACT] Self-Healing Complete!
 ```
 
 ---
@@ -301,16 +304,15 @@ sequenceDiagram
 ```mermaid
 erDiagram
     SERVICES {
-        string service_name PK
+        string service_name
         string health_url
         string remediation_url
         string environment
     }
-
     INCIDENTS {
-        int id PK
+        int id
         string timestamp
-        string service_name FK
+        string service_name
         string alert_name
         string action
         string opa_status
@@ -318,21 +320,19 @@ erDiagram
         string reasoning
         string environment
     }
-
     RUNBOOKS {
-        string alert_key PK
+        string alert_key
         string title
         string steps
     }
-
     WEBHOOK_CONFIG {
-        int id PK
+        int id
         string slack_url
         string discord_url
     }
 
-    SERVICES ||--o{ INCIDENTS : "monitored_by"
-    RUNBOOKS ||--o{ INCIDENTS : "guides_remediation"
+    SERVICES ||--o{ INCIDENTS : monitors
+    RUNBOOKS ||--o{ INCIDENTS : guides
 ```
 
 ---
@@ -341,11 +341,11 @@ erDiagram
 
 ```mermaid
 graph LR
-    User(("SRE Engineer")) <-->|UI Controls & Voice| ASHIP["ASHIP Platform Core"]
-    Target(("Target Microservices")) <-->|Telemetry & Reset Signal| ASHIP
-    LLM_Service(("Groq Llama 3.1")) <-->|Prompts & JSON Plans| ASHIP
-    OPA_Service(("OPA Rego Engine")) <-->|Policy Verification| ASHIP
-    Team_Chat(("Slack / Discord")) <--|Alert Cards| ASHIP
+    User["SRE Engineer"] <-->|UI Controls & Voice| ASHIP["ASHIP Platform Core"]
+    Target["Target Microservices"] <-->|Telemetry & Reset Signal| ASHIP
+    LLM_Service["Groq Llama 3.1"] <-->|Prompts & JSON Plans| ASHIP
+    OPA_Service["OPA Rego Engine"] <-->|Policy Verification| ASHIP
+    Team_Chat["Slack / Discord"] <--|Alert Cards| ASHIP
 ```
 
 ---
@@ -398,48 +398,36 @@ graph TD
 ```mermaid
 stateDiagram-v2
     [*] --> Idle_Monitoring
-    Idle_Monitoring --> Alert_Received: Ingest Anomaly Payload
-    Alert_Received --> Fetch_Telemetry: Query Target /health Endpoint
-    Fetch_Telemetry --> Match_Runbook: Lookup SRE KB Protocol
-    Match_Runbook --> Generate_Plan: Prompt Llama 3.1 LLM
-    Generate_Plan --> Sign_HMAC: Compute SHA-256 Signature
-    Sign_HMAC --> Evaluate_OPA: Submit JSON to OPA Rego
+    Idle_Monitoring --> Alert_Received : Ingest Anomaly Payload
+    Alert_Received --> Fetch_Telemetry : Query Target /health Endpoint
+    Fetch_Telemetry --> Match_Runbook : Lookup SRE KB Protocol
+    Match_Runbook --> Generate_Plan : Prompt Llama 3.1 LLM
+    Generate_Plan --> Sign_HMAC : Compute SHA-256 Signature
+    Sign_HMAC --> Evaluate_OPA : Submit JSON to OPA Rego
 
     state OPA_Decision <<choice>>
     Evaluate_OPA --> OPA_Decision
     
-    OPA_Decision --> Execute_Reset: Approved (allow = true)
-    OPA_Decision --> Abort_Escalate: Denied (allow = false)
+    OPA_Decision --> Execute_Reset : Approved (allow = true)
+    OPA_Decision --> Abort_Escalate : Denied (allow = false)
 
-    Execute_Reset --> Persist_Audit: Trigger /reset Webhook
-    Abort_Escalate --> Persist_Audit: Log Security Denial
+    Execute_Reset --> Persist_Audit : Trigger /reset Webhook
+    Abort_Escalate --> Persist_Audit : Log Security Denial
 
-    Persist_Audit --> Notify_Team: Write SQLite & Post Slack/Discord
-    Notify_Team --> Idle_Monitoring: Reset State to Baseline
+    Persist_Audit --> Notify_Team : Write SQLite & Post Slack/Discord
+    Notify_Team --> Idle_Monitoring : Reset State to Baseline
 ```
 
 ---
 
 ### 4.9 Collaboration Diagram (Communication Diagram)
 
-```
-[1: Ingest Alert] --------> (1.0 Ingest Gateway)
-                                   |
-                         [2: Query Metrics]
-                                   v
-(Target App:5001) <====== (2.0 Telemetry Inquirer)
-                                   |
-                         [3: Prompt LLM]
-                                   v
-                         (3.0 Llama 3.1 Engine)
-                                   |
-                         [4: Evaluate Policy]
-                                   v
-(OPA Server:8181) <====== (4.0 OPA Rego Gateway)
-                                   |
-                         [5: Execute Reset & Log]
-                                   v
-(SQLite DB) <------------ (5.0 Remediation Driver) -------> (Slack / Discord)
+```mermaid
+graph TD
+    A["1. Ingest Alert"] --> B["2. Query Metrics (Target App:5001)"]
+    B --> C["3. Prompt LLM (Llama 3.1 Engine)"]
+    C --> D["4. Evaluate Policy (OPA Server:8181)"]
+    D --> E["5. Execute Reset & Log (SQLite DB + Slack/Discord)"]
 ```
 
 ---
@@ -467,7 +455,7 @@ graph LR
 
     AppJSX --> CSS
     AppJSX --> VoiceComp
-    AppJSX <-->|SSE & REST| MainPy
+    AppJSX <--> MainPy
     MainPy <--> DBComp
     MainPy --> NotifyComp
     MainPy <--> OPAComp
@@ -480,8 +468,8 @@ graph LR
 
 ```mermaid
 stateDiagram-v2
-    [*] --> HEALTHY : Pod Operating Normally (RAM < 70%)
-    HEALTHY --> ANOMALOUS : Fault Injected (RAM > 90% / CPU Saturation)
+    [*] --> HEALTHY : Pod Operating Normally
+    HEALTHY --> ANOMALOUS : Fault Injected (RAM > 90%)
     ANOMALOUS --> OBSERVED : Prometheus Alert Triggered
     OBSERVED --> ORIENTED : Telemetry Metrics Ingested
     ORIENTED --> DECIDED : LLM Plan Generated & HMAC Signed
