@@ -3,6 +3,8 @@ import json
 import asyncio
 import hmac
 import hashlib
+import sqlite3
+from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +15,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="ASHIP AI Agent (Enterprise Upgrade)")
+app = FastAPI(title="ASHIP AI Agent (Enterprise Upgrade + SQLite DB + Webhooks)")
 
 # Enable CORS
 app.add_middleware(
@@ -23,6 +25,137 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# SQLite Database Setup for Persistent Incident Audit History
+DB_PATH = os.path.join(os.path.dirname(__file__), "incidents.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS incidents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            service_name TEXT,
+            alert_name TEXT,
+            action TEXT,
+            opa_status TEXT,
+            signature TEXT,
+            reasoning TEXT,
+            environment TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def db_insert_incident(inc: dict):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO incidents (timestamp, service_name, alert_name, action, opa_status, signature, reasoning, environment)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+            inc.get("service_name"),
+            inc.get("alert"),
+            inc.get("action"),
+            inc.get("opa_status"),
+            inc.get("signature"),
+            inc.get("reasoning"),
+            inc.get("environment", "production")
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[DB ERROR] {e}")
+
+def db_get_incidents(limit: int = 50):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM incidents ORDER BY id DESC LIMIT ?", (limit,))
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"[DB ERROR] {e}")
+        return []
+
+# Dynamic Webhook Configuration State
+WEBHOOK_CONFIG = {
+    "slack_url": os.getenv("SLACK_WEBHOOK_URL", ""),
+    "discord_url": os.getenv("DISCORD_WEBHOOK_URL", "")
+}
+
+class WebhookConfigSchema(BaseModel):
+    slack_url: str = Field(default="", description="Slack Incoming Webhook URL")
+    discord_url: str = Field(default="", description="Discord Webhook URL")
+
+async def notify_team_webhooks(inc: dict):
+    """Dispatches rich alert notifications to Slack and Discord."""
+    slack_url = WEBHOOK_CONFIG.get("slack_url") or os.getenv("SLACK_WEBHOOK_URL")
+    discord_url = WEBHOOK_CONFIG.get("discord_url") or os.getenv("DISCORD_WEBHOOK_URL")
+    
+    opa_status = inc.get("opa_status", "APPROVED")
+    emoji = "✅" if opa_status == "APPROVED" else "🚨"
+    title = f"{emoji} ASHIP Autonomous Event: {inc.get('alert')} on [{inc.get('service_name')}]"
+    
+    async with httpx.AsyncClient() as client:
+        # Slack Webhook Dispatch
+        if slack_url and slack_url.startswith("http"):
+            try:
+                slack_payload = {
+                    "text": title,
+                    "blocks": [
+                        {
+                            "type": "header",
+                            "text": {"type": "plain_text", "text": title}
+                        },
+                        {
+                            "type": "section",
+                            "fields": [
+                                {"type": "mrkdwn", "text": f"*Action*: `{inc.get('action')}`"},
+                                {"type": "mrkdwn", "text": f"*OPA Policy*: `{opa_status}`"},
+                                {"type": "mrkdwn", "text": f"*HMAC Signature*: `sha256:{inc.get('signature')}`"},
+                                {"type": "mrkdwn", "text": f"*Environment*: `{inc.get('environment', 'production')}`"}
+                            ]
+                        },
+                        {
+                            "type": "context",
+                            "elements": [{"type": "mrkdwn", "text": f"Reasoning: {inc.get('reasoning')}"}]
+                        }
+                    ]
+                }
+                await client.post(slack_url, json=slack_payload, timeout=4.0)
+                await send_log(f"🔔 [NOTIFY] Slack alert dispatched for [{inc.get('service_name')}].")
+            except Exception as e:
+                await send_log(f"⚠️ [NOTIFY] Slack dispatch notice: {str(e)}")
+
+        # Discord Webhook Dispatch
+        if discord_url and discord_url.startswith("http"):
+            try:
+                color = 0x10b981 if opa_status == "APPROVED" else 0xef4444
+                discord_payload = {
+                    "embeds": [{
+                        "title": title,
+                        "color": color,
+                        "fields": [
+                            {"name": "Action Taken", "value": f"`{inc.get('action')}`", "inline": True},
+                            {"name": "OPA Status", "value": f"`{opa_status}`", "inline": True},
+                            {"name": "HMAC Hash", "value": f"`sha256:{inc.get('signature')}`", "inline": True},
+                            {"name": "Reasoning", "value": str(inc.get("reasoning", "Autonomous SRE healing"))}
+                        ],
+                        "footer": {"text": "ASHIP Enterprise Autonomous Protocol"}
+                    }]
+                }
+                await client.post(discord_url, json=discord_payload, timeout=4.0)
+                await send_log(f"🔔 [NOTIFY] Discord alert dispatched for [{inc.get('service_name')}].")
+            except Exception as e:
+                await send_log(f"⚠️ [NOTIFY] Discord dispatch notice: {str(e)}")
 
 # Pydantic Schema for Structured Remediation Decisions
 class RemediationPlan(BaseModel):
@@ -99,7 +232,10 @@ async def root():
     return {
         "service": "ASHIP Enterprise AI SRE Agent Backend",
         "status": "online",
+        "database": "SQLite (incidents.db)",
         "endpoints": {
+            "incidents_history": "/incidents (GET SQLite records)",
+            "config_webhooks": "/config/webhooks (POST Slack/Discord Webhooks)",
             "logs_sse": "/logs (GET EventStream)",
             "alert_webhook": "/webhook/alert (POST)",
             "prometheus_webhook": "/webhook/prometheus (POST Alertmanager payload)",
@@ -110,6 +246,22 @@ async def root():
         },
         "dashboard_ui": "http://localhost:3000"
     }
+
+@app.get("/incidents")
+async def list_incidents(limit: int = 50):
+    """Fetches persistent incident records stored in SQLite database."""
+    records = db_get_incidents(limit=limit)
+    return {"status": "success", "count": len(records), "incidents": records}
+
+@app.post("/config/webhooks")
+async def configure_webhooks(cfg: WebhookConfigSchema):
+    """Dynamically updates Slack & Discord Webhook URLs."""
+    if cfg.slack_url:
+        WEBHOOK_CONFIG["slack_url"] = cfg.slack_url
+    if cfg.discord_url:
+        WEBHOOK_CONFIG["discord_url"] = cfg.discord_url
+    await send_log(f"⚙️ [CONFIG] Webhook notifications updated (Slack: {'Configured' if WEBHOOK_CONFIG['slack_url'] else 'None'}, Discord: {'Configured' if WEBHOOK_CONFIG['discord_url'] else 'None'})")
+    return {"status": "success", "config": WEBHOOK_CONFIG}
 
 @app.get("/registered-services")
 async def list_services():
@@ -129,16 +281,19 @@ async def register_service(reg: ServiceRegistration):
 
 @app.get("/export-postmortem")
 async def export_postmortem():
-    """Generates a formatted markdown incident post-mortem report."""
+    """Generates a formatted markdown incident post-mortem report from SQLite database."""
+    records = db_get_incidents(limit=100)
     report = "# ASHIP Autonomous Incident Post-Mortem Report\n\n"
-    report += f"**Protocol**: ASHIP Enterprise OODA Self-Healing\n\n"
+    report += f"**Protocol**: ASHIP Enterprise OODA Self-Healing (SQLite Persistent Audit Trail)\n"
+    report += f"**Report Generated**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
     report += "## Incident Audit History\n\n"
     
-    if not INCIDENT_HISTORY:
-        report += "_No critical incidents logged in current session window._\n"
+    if not records:
+        report += "_No critical incidents logged in SQLite database._\n"
     else:
-        for idx, inc in enumerate(INCIDENT_HISTORY, 1):
-            report += f"### Incident #{idx}: {inc.get('alert', 'Unknown')}\n"
+        for idx, inc in enumerate(records, 1):
+            report += f"### Incident #{idx}: {inc.get('alert_name', 'Unknown')}\n"
+            report += f"- **Timestamp**: `{inc.get('timestamp')}`\n"
             report += f"- **Target Service**: `{inc.get('service_name')}`\n"
             report += f"- **Action Taken**: `{inc.get('action')}`\n"
             report += f"- **OPA Status**: `{inc.get('opa_status')}`\n"
@@ -230,11 +385,10 @@ async def run_ooda_loop(alert_name: str, details: str, environment: str = "produ
                     from langchain_core.prompts import ChatPromptTemplate
                     
                     chat = ChatGroq(temperature=0, groq_api_key=groq_api_key, model_name="llama-3.1-8b-instant")
-                    # Double escape curly braces for LangChain schema template
                     prompt = ChatPromptTemplate.from_messages([
                         ("system", (
                             "You are ASHIP, an autonomous self-healing SRE agent. "
-                            "Output JSON matching schema: {{\\\"action\\\": \\\"<action>\\\", \\\"target\\\": \\\"" + service_name + "\\\", \\\"confidence\\\": 0.98, \\\"reasoning\\\": \\\"<explanation>\\\"}}. "
+                            "Output JSON matching schema: {{\"action\": \"<action>\", \"target\": \"" + service_name + "\", \"confidence\": 0.98, \"reasoning\": \"<explanation>\"}}. "
                             "Allowed actions: 'restart_pod', 'rollback_deployment', 'delete_database'."
                         )),
                         ("human", "Alert: {alert_name}. Details: {details}.")
@@ -254,7 +408,6 @@ async def run_ooda_loop(alert_name: str, details: str, environment: str = "produ
                     await send_log(f"⚠️ [DECIDE] LLM Call warning: {str(e)}. Using Pydantic heuristic engine.")
 
             if not decision:
-                # Deterministic Pydantic Heuristic decision fallback
                 if "memory-leak" in alert_name.lower() or "oom" in alert_name.lower():
                     plan = RemediationPlan(action="restart_pod", target=service_name, reasoning="RAM limit breached")
                 elif "cpu-spike" in alert_name.lower() or "cpu" in alert_name.lower():
@@ -265,7 +418,6 @@ async def run_ooda_loop(alert_name: str, details: str, environment: str = "produ
                     plan = RemediationPlan(action="restart_pod", target=service_name, reasoning="General container anomaly")
                 decision = plan.model_dump()
 
-            # Generate Cryptographic HMAC Signature
             signature = generate_signature(decision)
             decision["signature"] = signature
             decision["environment"] = environment
@@ -290,7 +442,6 @@ async def run_ooda_loop(alert_name: str, details: str, environment: str = "produ
                     opa_approved = opa_data.get("result", False)
                     await send_log(f"🛡️ [VALIDATE] OPA Response: {json.dumps(opa_data)}")
             except Exception as e:
-                # Local Rego fallback logic matching aship-policy.rego
                 action = decision.get("action")
                 if action == "restart_pod":
                     opa_approved = True
@@ -304,15 +455,25 @@ async def run_ooda_loop(alert_name: str, details: str, environment: str = "produ
 
             await asyncio.sleep(0.8)
 
-            # Log into Post-Mortem Audit History
-            INCIDENT_HISTORY.append({
+            # Incident Record Data Struct
+            incident_data = {
                 "alert": alert_name,
                 "service_name": service_name,
                 "action": decision.get("action"),
                 "opa_status": "APPROVED" if opa_approved else "DENIED",
                 "signature": signature,
-                "reasoning": decision.get("reasoning")
-            })
+                "reasoning": decision.get("reasoning"),
+                "environment": environment
+            }
+
+            # 1. Log into In-Memory History
+            INCIDENT_HISTORY.append(incident_data)
+
+            # 2. Persist to SQLite Database
+            db_insert_incident(incident_data)
+
+            # 3. Dispatch Real-Time Slack & Discord Webhook Notifications
+            asyncio.create_task(notify_team_webhooks(incident_data))
 
             # 4. ACT
             if opa_approved:
