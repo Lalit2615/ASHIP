@@ -533,11 +533,40 @@ FUNCTION run_ooda_loop(alert_name, service_name, environment):
 6. **Connect App Gateway**: Implemented `POST /register-service` enabling dynamic microservice registration.
 
 ### 5.4 Screenshots & Visual Interface Walkthrough
-*(Refer to live dashboard rendering at `http://localhost:3000`)*
-- **Mission Control Overview**: 3-column Figma dark mode interface showing live OpenTelemetry waveforms and 5-stage OODA pipeline.
-- **Pitch Demo Walkthrough**: 1-Click execution highlighting 1.4s autonomous self-healing.
-- **Connect App Modal**: Dynamic software registration interface for external endpoints.
-- **SQLite Audit Viewer**: Interactive modal displaying persistent historical incident records.
+
+Below are the high-resolution visual interface captures recorded from the live ASHIP React Mission Control Dashboard (`http://localhost:3000`):
+
+#### 📸 Snapshot 1: Full-Length Stitched Mission Control UI
+![Full-Length Stitched Mission Control UI](file:///C:/Users/lalit/.gemini/antigravity-ide/brain/1e33d9c7-826f-4e0f-96fe-0ea0a55428e5/aship_stitch_ui_1785826706403.png)
+
+---
+
+#### 📸 Snapshot 2: Top Header & OpenTelemetry Waveforms
+![Top Header & OpenTelemetry Waveforms](file:///C:/Users/lalit/.gemini/antigravity-ide/brain/1e33d9c7-826f-4e0f-96fe-0ea0a55428e5/dashboard_top_view_1785825848973.png)
+- **Features**: Real-time telemetry sparklines (`RAM %`, `CPU %`, `Latencies`), system health status indicator, active microservice registry counts, and global pitch execution trigger (`1-Click Pitch Demo`).
+
+---
+
+#### 📸 Snapshot 3: 5-Stage Closed-Loop OODA Pipeline Execution Engine
+![5-Stage Closed-Loop OODA Pipeline Engine](file:///C:/Users/lalit/.gemini/antigravity-ide/brain/1e33d9c7-826f-4e0f-96fe-0ea0a55428e5/dashboard_middle_view_1785825859987.png)
+- **Features**: Live progression across the 5 cognitive stages:
+  1. **OBSERVE**: Ingest alert payload and query `/health` endpoint metrics.
+  2. **ORIENT**: Cross-reference telemetry against SRE Runbook Knowledge Base.
+  3. **DECIDE**: Groq Llama 3.1 LLM plan generation + HMAC-SHA256 signature generation.
+  4. **VALIDATE**: Open Policy Agent (OPA) Rego policy check (`allow = true/false`).
+  5. **ACT**: HTTP webhook remediation dispatch + Slack/Discord notification.
+
+---
+
+#### 📸 Snapshot 4: Open Policy Agent (OPA) Guardrails & Diagnostic Log Stream
+![OPA Guardrails & Diagnostic Log Stream](file:///C:/Users/lalit/.gemini/antigravity-ide/brain/1e33d9c7-826f-4e0f-96fe-0ea0a55428e5/dashboard_lower_view_1785825868849.png)
+- **Features**: Zero-trust Rego security verification cards, live Server-Sent Events (SSE) diagnostic terminal logs, and real-time incident event stream.
+
+---
+
+#### 📸 Snapshot 5: SQLite Incident Audit Database & Software Gateway (+ CONNECT APP)
+![SQLite Incident Audit & Connect App Modal](file:///C:/Users/lalit/.gemini/antigravity-ide/brain/1e33d9c7-826f-4e0f-96fe-0ea0a55428e5/dashboard_deep_view_1785825881702.png)
+- **Features**: Historical incident log table stored in `incidents.db`, HMAC signature verification column, environment tags, and dynamic external software onboarding modal.
 
 ---
 
