@@ -1416,15 +1416,125 @@ This project successfully designed, implemented, and validated **ASHIP (Autonomo
 
 ## CHAPTER 9. APPENDIX
 
-### Appendix A: OPA Security Policy (`security/aship-policy.rego`)
-*(Refer to Section 5.5.2 for complete Rego Policy source code)*
+### Appendix A: Open Policy Agent Security Policy (`security/aship-policy.rego`)
+```rego
+package aship.security
 
-### Appendix B: Environment Configuration (`ai-agent/.env`)
+import future.keywords.in
+
+default allow = false
+
+# Rule 1: Always allow non-destructive actions across all environments
+allow {
+    input.action in ["restart_pod", "clear_cache", "scale_up", "flush_dns"]
+}
+
+# Rule 2: Allow scaling and configuration updates in staging environment
+allow {
+    input.environment == "staging"
+    input.action in ["rollback_deployment", "patch_config"]
+}
+
+# Rule 3: STRICT DENY - Block database deletions, disk purges, or destructive actions
+allow = false {
+    input.action in ["delete_database", "purge_disk", "drop_table", "terminate_node"]
+}
+
+# Rule 4: Production Guardrail - Require valid HMAC digital signature
+allow {
+    input.environment == "production"
+    input.action in ["restart_pod", "clear_cache"]
+    input.signature != ""
+}
+```
+
+---
+
+### Appendix B: Complete Environment Configuration (`ai-agent/.env`)
 ```env
-GROQ_API_KEY=your_groq_api_key_here
+# AI Agent API Credentials
+GROQ_API_KEY=gsk_your_groq_api_key_here
+OPENAI_API_KEY=sk-your_openai_key_optional
+
+# Security & Cryptographic HMAC Secret Key
 ASHIP_HMAC_SECRET=aship-enterprise-secret-key-2026
+
+# Target Microservice Endpoints
 TARGET_APP_URL=http://localhost:5001
 OPA_URL=http://localhost:8181/v1/data/aship/security/allow
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+
+# Notification Webhook URLs
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR_WORKSPACE/YOUR_CHANNEL/YOUR_TOKEN
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
+
+# Server Port Settings
+AGENT_PORT=8000
+FRONTEND_PORT=3000
+TARGET_PORT=5001
+OPA_PORT=8181
 ```
+
+---
+
+### Appendix C: REST API Endpoints Specification
+
+| Method | Endpoint | Description | Request Payload | Response |
+|---|---|---|---|---|
+| `GET` | `/health` | Ingest microservice health telemetry | None | `{ "status": "healthy", "memory_percent": 14.5 }` |
+| `POST` | `/webhook/alert` | Ingest Prometheus / Alertmanager anomaly payload | `{ "alert": "PodOOMKilled", "service": "auth" }` | `{ "status": "processing", "incident_id": 42 }` |
+| `GET` | `/logs` | SSE Event Stream for live UI terminal | None | Event Stream (`text/event-stream`) |
+| `GET` | `/incidents` | Fetch historical incident audit records | None | `[ { "id": 1, "action": "restart_pod", ... } ]` |
+| `POST` | `/register-service` | Dynamic Connect App software onboarding | `{ "service_name": "payment", "url": "..." }` | `{ "status": "registered" }` |
+| `POST` | `/chaos/memory-leak` | Inject synthetic RAM saturation fault | None | `{ "status": "fault_injected", "ram": 98.4 }` |
+| `POST` | `/chaos/reset` | Trigger container self-healing reset | None | `{ "status": "healed", "ram": 12.3 }` |
+
+---
+
+### Appendix D: Developer Quickstart & Installation Runbook
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/Lalit2615/ASHIP.git
+cd ASHIP
+
+# 2. Install AI Agent Dependencies
+cd ai-agent
+pip install -r requirements.txt
+
+# 3. Install Frontend Dependencies
+cd ../frontend
+npm install
+
+# 4. Start Monorepo Stack with Docker Compose
+cd ..
+docker-compose up --build -d
+
+# 5. Alternatively, Start Local Microservices Manually
+# Terminal 1 (Target App):
+cd target-app && python app.py
+
+# Terminal 2 (AI Agent Backend):
+cd ai-agent && python -m uvicorn main:app --port 8000
+
+# Terminal 3 (React UI Dashboard):
+cd frontend && npm run dev
+```
+
+---
+
+### Appendix E: Sample Cryptographic Audit Log Schema (`incidents.db`)
+
+```json
+{
+  "id": 104,
+  "timestamp": "2026-10-04T19:48:15.204Z",
+  "service_name": "custom-payment-service",
+  "alert_name": "PodOOMKilled",
+  "action": "restart_pod",
+  "opa_status": "APPROVED",
+  "signature": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "reasoning": "Memory threshold breached (98.4%). OPA Rego policy approved zero-downtime container reset.",
+  "environment": "production"
+}
+```
+
