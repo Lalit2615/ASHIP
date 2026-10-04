@@ -4,7 +4,34 @@
 
 ---
 
+---
+
+## DECLARATION
+
+I hereby declare that the work presented in this project report entitled **"Autonomous Self-Healing Infrastructure Protocol (ASHIP): Enterprise AI-Driven Site Reliability Engineering & Policy-Gated Self-Healing Protocol"** is an authentic record of original research and engineering development carried out by me.
+
+This work has not been submitted elsewhere for the award of any degree, diploma, or professional certification. All sources of information, open-source frameworks, literature, standards, and software tools utilized during this project have been formally cited and acknowledged.
+
+**Candidate Name**: SRE Engineering Team / Lead Developer  
+**Project Title**: Autonomous Self-Healing Infrastructure Protocol (ASHIP)  
+**Date**: October 2026  
+**Signature**: ______________________  
+
+---
+
+## ACKNOWLEDGEMENT
+
+I express my sincere gratitude to my academic advisors, project mentors, and industry Site Reliability Engineers (SREs) whose valuable guidance, constructive feedback, and technical insights steered the development of **ASHIP (Autonomous Self-Healing Infrastructure Protocol)**.
+
+I would also like to acknowledge the invaluable open-source contributions of the **Cloud Native Computing Foundation (CNCF)**, the **Open Policy Agent (OPA) Project**, **LangChain AI Ecosystem**, **Groq Cloud Infrastructure**, **FastAPI**, and **React Team**. Their cutting-edge platforms provided the robust ecosystem needed to achieve sub-2-second autonomous remediation.
+
+Finally, I extend my heartfelt thanks to my colleagues and peers for their continuous support and assistance throughout the system architecture, testing, and evaluation phases of this project.
+
+---
+
 ## TABLE OF CONTENTS
+- [Declaration](#declaration)
+- [Acknowledgement](#acknowledgement)
 - [List of Figures / Diagrams](#list-of-figures--diagrams)
 - [Chapter 1. Introduction](#chapter-1-introduction)
   - 1.1 Background of Study
@@ -52,7 +79,7 @@
   - 7.2 Key Achievements
   - 7.3 Limitations
   - 7.4 Future Enhancements
-- [Chapter 8. References](#chapter-8-references)
+- [Chapter 8. References & Bibliography](#chapter-8-references--bibliography)
 - [Chapter 9. Appendix](#chapter-9-appendix)
 
 ---
@@ -1392,25 +1419,33 @@ This project successfully designed, implemented, and validated **ASHIP (Autonomo
 
 ---
 
-## CHAPTER 8. REFERENCES
+## CHAPTER 8. REFERENCES & BIBLIOGRAPHY
 
-### 8.1 Academic Papers & Journals
-1. **Beyer, B., Jones, C. R., Petoff, J., & Murphy, N. R.** (2016). *Site Reliability Engineering: How Google Runs Production Systems*. O'Reilly Media, Inc. ISBN: 978-1491929124.
-2. **Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., & Cao, Y.** (2023). "ReAct: Synergizing Reasoning and Acting in Language Models". *International Conference on Learning Representations (ICLR)*. arXiv:2210.03629.
-3. **Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, Ł., & Polosukhin, I.** (2017). "Attention Is All You Need". *Advances in Neural Information Processing Systems (NeurIPS)*, 30, 5998–6008.
-4. **Basiri, A., Behnam, N., de Rooij, R., Hochstein, L., Kosewski, L., Reynolds, J., & Rosenthal, C.** (2016). "Chaos Engineering". *IEEE Software*, 33(3), 35–41. DOI: 10.1109/MS.2016.60.
-5. **Boyd, J. R.** (1987). *A Discourse on Winning and Losing*. Air University Press, Maxwell AFB, AL. (Foundational OODA Loop Cognitive Framework).
+### 8.1 Primary Academic References (IEEE Style)
+1. B. Beyer, C. R. Jones, J. Petoff, and N. R. Murphy, *Site Reliability Engineering: How Google Runs Production Systems*. Sebastopol, CA: O'Reilly Media, 2016.
+2. S. Yao et al., "ReAct: Synergizing Reasoning and Acting in Language Models," in *Proc. Int. Conf. Learn. Represent. (ICLR)*, 2023. arXiv:2210.03629.
+3. A. Vaswani et al., "Attention Is All You Need," in *Proc. Adv. Neural Inf. Process. Syst. (NeurIPS)*, vol. 30, pp. 5998–6008, 2017.
+4. A. Basiri et al., "Chaos Engineering," *IEEE Software*, vol. 33, no. 3, pp. 35–41, May-June 2016. DOI: 10.1109/MS.2016.60.
+5. J. R. Boyd, *A Discourse on Winning and Losing*. Maxwell AFB, AL: Air University Press, 1987.
 
-### 8.2 Industry Standards & Security Manuals
-6. **Cloud Native Computing Foundation (CNCF)** (2024). *Open Policy Agent (OPA) Specifications & Rego Policy Language Reference Manual*. Open Policy Agent Project. Available: https://www.openpolicyagent.org/docs/latest/
-7. **National Institute of Standards and Technology (NIST)** (2020). *Special Publication 800-63B: Digital Identity Guidelines & Cryptographic Verification Standards*. U.S. Department of Commerce. DOI: 10.6028/NIST.SP.800-63b.
-8. **Krawczyk, H., Bellare, M., & Canetti, R.** (1997). *RFC 2104: HMAC: Keyed-Hashing for Message Authentication*. Network Working Group, Internet Engineering Task Force (IETF).
-9. **OpenTelemetry Authors** (2025). *OpenTelemetry Specification: Telemetry Tracing, Metrics, and Logging Standards for Cloud-Native Software*. Cloud Native Computing Foundation. Available: https://opentelemetry.io/docs/
+### 8.2 Comprehensive Bibliography
 
-### 8.3 Software Engineering Frameworks & Documentation
-10. **Kubernetes Authors** (2025). *Kubernetes Documentation: Container Lifecycle Hooks, Pod Health Probes, and Custom Resource Definitions (CRDs)*. Available: https://kubernetes.io/docs/
-11. **FastAPI Development Team** (2026). *FastAPI Framework Manual: Asynchronous Web Framework with Pydantic Data Validation*. Available: https://fastapi.tiangolo.com/
-12. **LangChain Project** (2026). *LangChain Python API Documentation: Autonomous Agent Chains and Structured Output Parser*. Available: https://python.langchain.com/
+#### Books & Monographs
+- N. R. Murphy, D. K. Rensin, H. Zacker, and N. Hirsch, *Site Reliability Workbook: Practical Ways to Implement SRE*. O'Reilly Media, 2018.
+- C. Rosenthal and N. Jones, *Chaos Engineering: System Resiliency in Practice*. O'Reilly Media, 2020.
+- T. A. Limoncelli, C. Chalup, and C. Hogan, *The Practice of Cloud System Administration: Designing and Operating Large-Scale Distributed Systems*. Addison-Wesley, 2014.
+
+#### Technical Specifications & Standards
+- Cloud Native Computing Foundation (CNCF), "Open Policy Agent (OPA) Rego Language Specification," CNCF Technical Docs, 2024. [Online]. Available: https://www.openpolicyagent.org/docs/
+- National Institute of Standards and Technology (NIST), "SP 800-63B: Digital Identity Guidelines - Authentication and Lifecycle Management," U.S. Dept. of Commerce, 2020.
+- H. Krawczyk, M. Bellare, and R. Canetti, "HMAC: Keyed-Hashing for Message Authentication," IETF RFC 2104, Feb. 1997.
+- OpenTelemetry Consortium, "OpenTelemetry Observability Specification v1.30.0," CNCF, 2025. [Online]. Available: https://opentelemetry.io/docs/
+
+#### Web & Open-Source Resources
+- Kubernetes Authors, "Kubernetes Architecture, Pod Disruption Budgets, and Custom Controllers," 2025. Available: https://kubernetes.io/docs/
+- FastAPI Development Team, "FastAPI Async ASGI Server & Pydantic Integration," 2026. Available: https://fastapi.tiangolo.com/
+- LangChain AI Project, "LangChain Autonomous Agent Chains & Structured Output Validation," 2026. Available: https://python.langchain.com/
+- Groq Cloud AI, "Groq LPU Inference Engine Benchmarks for Llama 3.1 8B," 2026. Available: https://groq.com/
 
 
 
