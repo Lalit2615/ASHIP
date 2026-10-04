@@ -1394,13 +1394,25 @@ This project successfully designed, implemented, and validated **ASHIP (Autonomo
 
 ## CHAPTER 8. REFERENCES
 
-1. Google SRE Book: *Site Reliability Engineering: How Google Runs Production Systems*, O'Reilly Media.
-2. Open Policy Agent (OPA) Documentation: *Policy-as-Code Reference Manual*, Cloud Native Computing Foundation (CNCF).
-3. LangChain & Groq Documentation: *Building Autonomous LLM Agents with Structured Output Validation*, 2026.
-4. Kubernetes Documentation: *Pod Lifecycle, Health Probes, and Custom Resource Definitions (CRDs)*, CNCF.
-5. NIST Special Publication 800-63B: *Digital Identity Guidelines and Cryptographic HMAC Verification Standards*.
+### 8.1 Academic Papers & Journals
+1. **Beyer, B., Jones, C. R., Petoff, J., & Murphy, N. R.** (2016). *Site Reliability Engineering: How Google Runs Production Systems*. O'Reilly Media, Inc. ISBN: 978-1491929124.
+2. **Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., & Cao, Y.** (2023). "ReAct: Synergizing Reasoning and Acting in Language Models". *International Conference on Learning Representations (ICLR)*. arXiv:2210.03629.
+3. **Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, Ł., & Polosukhin, I.** (2017). "Attention Is All You Need". *Advances in Neural Information Processing Systems (NeurIPS)*, 30, 5998–6008.
+4. **Basiri, A., Behnam, N., de Rooij, R., Hochstein, L., Kosewski, L., Reynolds, J., & Rosenthal, C.** (2016). "Chaos Engineering". *IEEE Software*, 33(3), 35–41. DOI: 10.1109/MS.2016.60.
+5. **Boyd, J. R.** (1987). *A Discourse on Winning and Losing*. Air University Press, Maxwell AFB, AL. (Foundational OODA Loop Cognitive Framework).
 
----
+### 8.2 Industry Standards & Security Manuals
+6. **Cloud Native Computing Foundation (CNCF)** (2024). *Open Policy Agent (OPA) Specifications & Rego Policy Language Reference Manual*. Open Policy Agent Project. Available: https://www.openpolicyagent.org/docs/latest/
+7. **National Institute of Standards and Technology (NIST)** (2020). *Special Publication 800-63B: Digital Identity Guidelines & Cryptographic Verification Standards*. U.S. Department of Commerce. DOI: 10.6028/NIST.SP.800-63b.
+8. **Krawczyk, H., Bellare, M., & Canetti, R.** (1997). *RFC 2104: HMAC: Keyed-Hashing for Message Authentication*. Network Working Group, Internet Engineering Task Force (IETF).
+9. **OpenTelemetry Authors** (2025). *OpenTelemetry Specification: Telemetry Tracing, Metrics, and Logging Standards for Cloud-Native Software*. Cloud Native Computing Foundation. Available: https://opentelemetry.io/docs/
+
+### 8.3 Software Engineering Frameworks & Documentation
+10. **Kubernetes Authors** (2025). *Kubernetes Documentation: Container Lifecycle Hooks, Pod Health Probes, and Custom Resource Definitions (CRDs)*. Available: https://kubernetes.io/docs/
+11. **FastAPI Development Team** (2026). *FastAPI Framework Manual: Asynchronous Web Framework with Pydantic Data Validation*. Available: https://fastapi.tiangolo.com/
+12. **LangChain Project** (2026). *LangChain Python API Documentation: Autonomous Agent Chains and Structured Output Parser*. Available: https://python.langchain.com/
+
+
 
 ## CHAPTER 9. APPENDIX
 
