@@ -4,28 +4,43 @@
 
 ---
 
----
-
 ## DECLARATION
 
-I hereby declare that the work presented in this project report entitled **"Autonomous Self-Healing Infrastructure Protocol (ASHIP): Enterprise AI-Driven Site Reliability Engineering & Policy-Gated Self-Healing Protocol"** is an authentic record of original research and engineering development carried out by me.
+I hereby declare that the work presented in this project report entitled **"Autonomous Self-Healing Infrastructure Protocol (ASHIP): Enterprise AI-Driven Site Reliability Engineering & Policy-Gated Self-Healing Protocol"** is an authentic record of original research, architectural design, software development, and empirical evaluation conducted by me under supervision.
 
-This work has not been submitted elsewhere for the award of any degree, diploma, or professional certification. All sources of information, open-source frameworks, literature, standards, and software tools utilized during this project have been formally cited and acknowledged.
+I confirm that this report represents my own original effort, and no part of this project has been copied or plagiarized from any existing published material, thesis, or commercial product without due attribution. Furthermore, this work has not been previously submitted, in whole or in part, to any other university, institute, or examining body for the award of any academic degree, diploma, or professional certification.
 
-**Candidate Name**: SRE Engineering Team / Lead Developer  
+All sources of technical knowledge, open-source libraries, academic papers, standards specifications, and software frameworks utilized during the conceptualization, development, and validation of this project have been explicitly acknowledged, cited, and listed in the reference and bibliography sections of this report.
+
+**Candidate / Author Name**: SRE Engineering Team / Lead Developer  
+**Roll No. / Registration No.**: ASHIP-SRE-2026-001  
 **Project Title**: Autonomous Self-Healing Infrastructure Protocol (ASHIP)  
+**Department / Division**: Department of Computer Science & Software Engineering  
 **Date**: October 2026  
-**Signature**: ______________________  
+**Place**: New Delhi, India  
+
+**Signature of Candidate**: ______________________  
 
 ---
 
 ## ACKNOWLEDGEMENT
 
-I express my sincere gratitude to my academic advisors, project mentors, and industry Site Reliability Engineers (SREs) whose valuable guidance, constructive feedback, and technical insights steered the development of **ASHIP (Autonomous Self-Healing Infrastructure Protocol)**.
+The successful completion of **ASHIP (Autonomous Self-Healing Infrastructure Protocol)** marks a major milestone in my academic and engineering journey, and it would not have been possible without the invaluable guidance, technical mentorship, and constant encouragement of numerous individuals and organizations.
 
-I would also like to acknowledge the invaluable open-source contributions of the **Cloud Native Computing Foundation (CNCF)**, the **Open Policy Agent (OPA) Project**, **LangChain AI Ecosystem**, **Groq Cloud Infrastructure**, **FastAPI**, and **React Team**. Their cutting-edge platforms provided the robust ecosystem needed to achieve sub-2-second autonomous remediation.
+First and foremost, I express my deepest gratitude to my project supervisor, faculty advisors, and institutional mentors for their unwavering support, insightful feedback, and intellectual guidance throughout all phases of this project—from initial problem formulation and architectural design to empirical evaluation and documentation. Their high standards of academic rigor and technical excellence motivated me to push the boundaries of cloud-native infrastructure automation.
 
-Finally, I extend my heartfelt thanks to my colleagues and peers for their continuous support and assistance throughout the system architecture, testing, and evaluation phases of this project.
+I am profoundly grateful to the global open-source software community and leading cloud computing bodies, particularly:
+- The **Cloud Native Computing Foundation (CNCF)** for pioneering open standards in container orchestration and observability.
+- The **Open Policy Agent (OPA) Project & Styra Team** for providing the Rego Policy-as-Code engine that guarantees deterministic security guardrails in our protocol.
+- The **LangChain AI Ecosystem & Groq Cloud Infrastructure Team** for making high-throughput LPU inference and autonomous LLM chain orchestration accessible for real-time Site Reliability Engineering (SRE).
+- The **FastAPI, React, Vite, and Tailwind CSS Developer Communities** for empowering rapid development of enterprise-grade microservice backends and reactive control center dashboards.
+
+Special recognition goes to my fellow researchers, SRE colleagues, and peer engineers who provided critical feedback during initial prototype testing, chaos failure injection experiments, and UI walkthroughs. Their practical insights on Mean Time To Recovery (MTTR) and alert fatigue were instrumental in refining the 5-stage OODA cognitive pipeline.
+
+Finally, I owe a debt of eternal gratitude to my parents, family members, and friends for their unconditional love, patience, understanding, and moral encouragement during long hours of research, debugging, and testing. Their belief in my potential has been my primary source of inspiration.
+
+**Candidate Name**: SRE Engineering Team / Lead Developer  
+**Date**: October 2026  
 
 ---
 
