@@ -4,6 +4,21 @@
 
 ---
 
+---
+
+## PREFACE
+
+Modern cloud-native software engineering has unlocked unprecedented agility through distributed microservice architectures, containerization, and automated CI/CD pipelines. However, this architectural transformation has introduced a parallel crisis of operational complexity. As distributed systems scale across multi-region clusters, traditional manual Site Reliability Engineering (SRE) workflows struggle to keep pace with the overwhelming velocity and volume of telemetry alerts. Late-night on-call incidents, prolonged Mean Time to Recovery (MTTR), and severe engineer alert fatigue have become defining operational bottlenecks for enterprise technology organizations.
+
+This project report presents the **Autonomous Self-Healing Infrastructure Protocol (ASHIP)**—an enterprise-grade, policy-gated SRE orchestration platform engineered to transition cloud operations from reactive manual intervention to real-time, closed-loop autonomous remediation.
+
+The core motivation driving ASHIP stems from a fundamental tension in modern AIOps: while Large Language Models (LLMs) offer extraordinary semantic diagnostic capabilities, deploying unconstrained AI agents directly into production carries severe operational risks. An unconstrained AI model might hallucinate destructive commands, such as dropping persistent database schemas or purging cluster storage. To resolve this dilemma, ASHIP implements a zero-trust architecture that couples an Agentic LLM Observe-Orient-Decide-Act (OODA) cognitive loop with deterministic Open Policy Agent (OPA) Policy-as-Code safety guardrails and HMAC-SHA256 cryptographic non-repudiation.
+
+This evaluation report documents the end-to-end conceptualization, architectural design, production implementation, chaos injection benchmarks, and formal references of ASHIP. Structured across nine comprehensive chapters, it provides full primary source code listings, UML/DFD diagrams, and empirical results demonstrating a 95.2% reduction in recovery time (achieving a 1.42-second MTTR). It is intended for site reliability engineers, cloud architects, researchers, and systems developers exploring the frontier of safe, policy-governed artificial intelligence in IT operations.
+
+**Candidate / Lead Developer**: SRE Engineering Team  
+**Date**: October 2026  
+
 ## DECLARATION
 
 I hereby declare that the work presented in this project report entitled **"Autonomous Self-Healing Infrastructure Protocol (ASHIP): Enterprise AI-Driven Site Reliability Engineering & Policy-Gated Self-Healing Protocol"** is an authentic record of original research, architectural design, software development, and empirical evaluation conducted by me under supervision.
@@ -45,6 +60,7 @@ Finally, I owe a debt of eternal gratitude to my parents, family members, and fr
 ---
 
 ## TABLE OF CONTENTS
+- [Preface](#preface)
 - [Declaration](#declaration)
 - [Acknowledgement](#acknowledgement)
 - [List of Figures / Diagrams](#list-of-figures--diagrams)
