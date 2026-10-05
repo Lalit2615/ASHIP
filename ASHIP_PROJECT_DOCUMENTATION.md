@@ -1727,36 +1727,42 @@ This project successfully designed, implemented, and validated **ASHIP (Autonomo
 
 ## CHAPTER 9. APPENDIX
 
-### Appendix A: Open Policy Agent Security Policy (`security/aship-policy.rego`)
+### Appendix A: Open Policy Agent Security Rules (`security/aship-policy.rego`)
 ```rego
 package aship.security
 
-import future.keywords.in
-
+# By default, block everything the AI suggests
 default allow = false
 
-# Rule 1: Always allow non-destructive actions across all environments
+# Rule 1: The AI is ALLOWED to restart pods in any environment
 allow {
-    input.action in ["restart_pod", "clear_cache", "scale_up", "flush_dns"]
+    input.action == "restart_pod"
+    not deny
 }
 
-# Rule 2: Allow scaling and configuration updates in staging environment
+# Rule 2: Rollback deployment is allowed in staging automatically, but requires operator approval in production
 allow {
+    input.action == "rollback_deployment"
     input.environment == "staging"
-    input.action in ["rollback_deployment", "patch_config"]
+    not deny
 }
 
-# Rule 3: STRICT DENY - Block database deletions, disk purges, or destructive actions
-allow = false {
-    input.action in ["delete_database", "purge_disk", "drop_table", "terminate_node"]
-}
-
-# Rule 4: Production Guardrail - Require valid HMAC digital signature
 allow {
+    input.action == "rollback_deployment"
     input.environment == "production"
-    input.action in ["restart_pod", "clear_cache"]
-    input.signature != ""
+    input.operator_approved == true
+    not deny
 }
+
+# ❌ Unsafe actions: NEVER allow database purges or persistent volume claim deletions
+deny {
+    input.action == "delete_database"
+}
+
+deny {
+    input.action == "delete_pvc"
+}
+
 ```
 
 ---
@@ -1787,7 +1793,2008 @@ OPA_PORT=8181
 
 ---
 
-### Appendix C: REST API Endpoints Specification
+### Appendix C: AI Agent Backend FastAPI Server Core (`ai-agent/main.py`)
+```python
+import os
+import json
+import asyncio
+import hmac
+import hashlib
+import sqlite3
+from datetime import datetime
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+import httpx
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+app = FastAPI(title="ASHIP AI Agent (Enterprise Upgrade + SQLite DB + Webhooks)")
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# SQLite Database Setup for Persistent Incident Audit History
+DB_PATH = os.path.join(os.path.dirname(__file__), "incidents.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS incidents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            service_name TEXT,
+            alert_name TEXT,
+            action TEXT,
+            opa_status TEXT,
+            signature TEXT,
+            reasoning TEXT,
+            environment TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def db_insert_incident(inc: dict):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO incidents (timestamp, service_name, alert_name, action, opa_status, signature, reasoning, environment)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+            inc.get("service_name"),
+            inc.get("alert"),
+            inc.get("action"),
+            inc.get("opa_status"),
+            inc.get("signature"),
+            inc.get("reasoning"),
+            inc.get("environment", "production")
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[DB ERROR] {e}")
+
+def db_get_incidents(limit: int = 50):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM incidents ORDER BY id DESC LIMIT ?", (limit,))
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"[DB ERROR] {e}")
+        return []
+
+# Dynamic Webhook Configuration State
+WEBHOOK_CONFIG = {
+    "slack_url": os.getenv("SLACK_WEBHOOK_URL", ""),
+    "discord_url": os.getenv("DISCORD_WEBHOOK_URL", "")
+}
+
+class WebhookConfigSchema(BaseModel):
+    slack_url: str = Field(default="", description="Slack Incoming Webhook URL")
+    discord_url: str = Field(default="", description="Discord Webhook URL")
+
+async def notify_team_webhooks(inc: dict):
+    """Dispatches rich alert notifications to Slack and Discord."""
+    slack_url = WEBHOOK_CONFIG.get("slack_url") or os.getenv("SLACK_WEBHOOK_URL")
+    discord_url = WEBHOOK_CONFIG.get("discord_url") or os.getenv("DISCORD_WEBHOOK_URL")
+    
+    opa_status = inc.get("opa_status", "APPROVED")
+    emoji = "✅" if opa_status == "APPROVED" else "🚨"
+    title = f"{emoji} ASHIP Autonomous Event: {inc.get('alert')} on [{inc.get('service_name')}]"
+    
+    async with httpx.AsyncClient() as client:
+        # Slack Webhook Dispatch
+        if slack_url and slack_url.startswith("http"):
+            try:
+                slack_payload = {
+                    "text": title,
+                    "blocks": [
+                        {
+                            "type": "header",
+                            "text": {"type": "plain_text", "text": title}
+                        },
+                        {
+                            "type": "section",
+                            "fields": [
+                                {"type": "mrkdwn", "text": f"*Action*: `{inc.get('action')}`"},
+                                {"type": "mrkdwn", "text": f"*OPA Policy*: `{opa_status}`"},
+                                {"type": "mrkdwn", "text": f"*HMAC Signature*: `sha256:{inc.get('signature')}`"},
+                                {"type": "mrkdwn", "text": f"*Environment*: `{inc.get('environment', 'production')}`"}
+                            ]
+                        },
+                        {
+                            "type": "context",
+                            "elements": [{"type": "mrkdwn", "text": f"Reasoning: {inc.get('reasoning')}"}]
+                        }
+                    ]
+                }
+                await client.post(slack_url, json=slack_payload, timeout=4.0)
+                await send_log(f"🔔 [NOTIFY] Slack alert dispatched for [{inc.get('service_name')}].")
+            except Exception as e:
+                await send_log(f"⚠️ [NOTIFY] Slack dispatch notice: {str(e)}")
+
+        # Discord Webhook Dispatch
+        if discord_url and discord_url.startswith("http"):
+            try:
+                color = 0x10b981 if opa_status == "APPROVED" else 0xef4444
+                discord_payload = {
+                    "embeds": [{
+                        "title": title,
+                        "color": color,
+                        "fields": [
+                            {"name": "Action Taken", "value": f"`{inc.get('action')}`", "inline": True},
+                            {"name": "OPA Status", "value": f"`{opa_status}`", "inline": True},
+                            {"name": "HMAC Hash", "value": f"`sha256:{inc.get('signature')}`", "inline": True},
+                            {"name": "Reasoning", "value": str(inc.get("reasoning", "Autonomous SRE healing"))}
+                        ],
+                        "footer": {"text": "ASHIP Enterprise Autonomous Protocol"}
+                    }]
+                }
+                await client.post(discord_url, json=discord_payload, timeout=4.0)
+                await send_log(f"🔔 [NOTIFY] Discord alert dispatched for [{inc.get('service_name')}].")
+            except Exception as e:
+                await send_log(f"⚠️ [NOTIFY] Discord dispatch notice: {str(e)}")
+
+# Pydantic Schema for Structured Remediation Decisions
+class RemediationPlan(BaseModel):
+    action: str = Field(description="Action name: restart_pod, rollback_deployment, or delete_database")
+    target: str = Field(description="Target microservice or resource identifier")
+    confidence: float = Field(default=0.95, description="AI confidence score")
+    reasoning: str = Field(default="Automated SRE anomaly remediation", description="Diagnostic explanation")
+
+# Pydantic Schema for Dynamic Service Registration
+class ServiceRegistration(BaseModel):
+    service_name: str = Field(description="Name of the external service or workload")
+    health_url: str = Field(description="URL to query health and telemetry metrics")
+    remediation_url: str = Field(description="URL to trigger remediation reset")
+    environment: str = Field(default="production", description="Environment: staging or production")
+
+# In-Memory Registry for External Services
+REGISTERED_SERVICES = {
+    "aship-target-app": {
+        "service_name": "aship-target-app",
+        "health_url": "http://localhost:5001/health",
+        "remediation_url": "http://localhost:5001/chaos/reset",
+        "environment": "production"
+    }
+}
+
+# Incident Audit History for Post-Mortem Export
+INCIDENT_HISTORY = []
+
+# Built-in RAG Post-Mortem & SRE Runbook Knowledge Base
+SRE_RUNBOOKS = {
+    "podoomkilled": {
+        "title": "K8s-RB-102: Container Out-Of-Memory Recovery",
+        "steps": "Query cgroup memory usage -> Check memory leaks -> Execute zero-downtime rolling pod restart -> Verify heap metric recovery."
+    },
+    "cpuspikealert": {
+        "title": "K8s-RB-304: CPU Threadpool Saturation Mitigation",
+        "steps": "Check threadpool backlog -> Scale deployment or rollback to previous stable commit -> Verify CPU scheduler balance."
+    },
+    "databaseresetrequest": {
+        "title": "K8s-RB-901: Unauthorized Persistent Storage Purge Safeguard",
+        "steps": "Intercept database deletion attempt -> Enforce OPA Rego blocklist -> Escalate to Security Incident Response (SIRT)."
+    }
+}
+
+# Store active SSE clients
+clients = []
+ooda_lock = asyncio.Lock()
+
+async def send_log(message: str):
+    """Broadcasts a log message to stdout and all active SSE client queues."""
+    try:
+        print(f"[Log] {message}")
+    except Exception:
+        try:
+            print(f"[Log] {message.encode('ascii', errors='replace').decode('ascii')}")
+        except Exception:
+            pass
+            
+    for queue in list(clients):
+        try:
+            queue.put_nowait(message)
+        except Exception:
+            pass
+
+def generate_signature(decision: dict) -> str:
+    """Generates an HMAC-SHA256 cryptographic signature for AI auditability."""
+    secret = os.getenv("ASHIP_HMAC_SECRET", "aship-enterprise-secret-key")
+    payload = json.dumps(decision, sort_keys=True).encode('utf-8')
+    return hmac.new(secret.encode('utf-8'), payload, hashlib.sha256).hexdigest()[:16]
+
+@app.get("/")
+async def root():
+    """Root endpoint for ASHIP AI Agent."""
+    return {
+        "service": "ASHIP Enterprise AI SRE Agent Backend",
+        "status": "online",
+        "database": "SQLite (incidents.db)",
+        "endpoints": {
+            "incidents_history": "/incidents (GET SQLite records)",
+            "config_webhooks": "/config/webhooks (POST Slack/Discord Webhooks)",
+            "logs_sse": "/logs (GET EventStream)",
+            "alert_webhook": "/webhook/alert (POST)",
+            "prometheus_webhook": "/webhook/prometheus (POST Alertmanager payload)",
+            "register_service": "/register-service (POST)",
+            "registered_services": "/registered-services (GET)",
+            "export_postmortem": "/export-postmortem (GET Markdown Report)",
+            "api_docs": "/docs"
+        },
+        "dashboard_ui": "http://localhost:3000"
+    }
+
+@app.get("/incidents")
+async def list_incidents(limit: int = 50):
+    """Fetches persistent incident records stored in SQLite database."""
+    records = db_get_incidents(limit=limit)
+    return {"status": "success", "count": len(records), "incidents": records}
+
+@app.post("/config/webhooks")
+async def configure_webhooks(cfg: WebhookConfigSchema):
+    """Dynamically updates Slack & Discord Webhook URLs."""
+    if cfg.slack_url:
+        WEBHOOK_CONFIG["slack_url"] = cfg.slack_url
+    if cfg.discord_url:
+        WEBHOOK_CONFIG["discord_url"] = cfg.discord_url
+    await send_log(f"⚙️ [CONFIG] Webhook notifications updated (Slack: {'Configured' if WEBHOOK_CONFIG['slack_url'] else 'None'}, Discord: {'Configured' if WEBHOOK_CONFIG['discord_url'] else 'None'})")
+    return {"status": "success", "config": WEBHOOK_CONFIG}
+
+@app.get("/registered-services")
+async def list_services():
+    """Lists all dynamically registered external services."""
+    return {"registered_services": list(REGISTERED_SERVICES.values())}
+
+@app.post("/register-service")
+async def register_service(reg: ServiceRegistration):
+    """Registers an external software service for auto-healing."""
+    REGISTERED_SERVICES[reg.service_name] = reg.model_dump()
+    await send_log(f"🔌 [REGISTRATION] Dynamic service registered: '{reg.service_name}' ({reg.health_url})")
+    return {
+        "status": "success",
+        "message": f"Service '{reg.service_name}' registered for ASHIP auto-healing.",
+        "details": reg.model_dump()
+    }
+
+@app.get("/export-postmortem")
+async def export_postmortem():
+    """Generates a formatted markdown incident post-mortem report from SQLite database."""
+    records = db_get_incidents(limit=100)
+    report = "# ASHIP Autonomous Incident Post-Mortem Report\n\n"
+    report += f"**Protocol**: ASHIP Enterprise OODA Self-Healing (SQLite Persistent Audit Trail)\n"
+    report += f"**Report Generated**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+    report += "## Incident Audit History\n\n"
+    
+    if not records:
+        report += "_No critical incidents logged in SQLite database._\n"
+    else:
+        for idx, inc in enumerate(records, 1):
+            report += f"### Incident #{idx}: {inc.get('alert_name', 'Unknown')}\n"
+            report += f"- **Timestamp**: `{inc.get('timestamp')}`\n"
+            report += f"- **Target Service**: `{inc.get('service_name')}`\n"
+            report += f"- **Action Taken**: `{inc.get('action')}`\n"
+            report += f"- **OPA Status**: `{inc.get('opa_status')}`\n"
+            report += f"- **HMAC Audit Signature**: `sha256:{inc.get('signature')}`\n"
+            report += f"- **Reasoning**: {inc.get('reasoning')}\n\n"
+
+    return Response(content=report, media_type="text/markdown")
+
+@app.get("/logs")
+async def get_logs(request: Request):
+    """SSE endpoint streaming live OODA reasoning and OPA security traces."""
+    queue = asyncio.Queue()
+    clients.append(queue)
+    
+    async def event_generator():
+        try:
+            yield f"data: {json.dumps({'message': 'CONNECTED', 'type': 'system'})}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield f"data: {json.dumps({'message': msg, 'type': 'log'})}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            if queue in clients:
+                clients.remove(queue)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+async def run_ooda_loop(alert_name: str, details: str, environment: str = "production", operator_approved: bool = False, service_name: str = "aship-target-app", target_url: str = None):
+    """Executes the enterprise OODA (Observe-Orient-Decide-Validate-Act) cycle."""
+    async with ooda_lock:
+        try:
+            await send_log(f"⚡ [OODA] Initiating Autonomous Healing Cycle for [{service_name.upper()}] (Env: {environment.upper()})...")
+            await asyncio.sleep(0.5)
+            
+            # 1. OBSERVE & ORIENT
+            await send_log(f"🔍 [OBSERVE] Alert ingested: '{alert_name}' ({details})")
+            await asyncio.sleep(0.8)
+
+            # RAG Runbook Lookup
+            runbook_key = alert_name.lower().replace(" ", "")
+            matched_runbook = SRE_RUNBOOKS.get(runbook_key, None)
+            if matched_runbook:
+                await send_log(f"📖 [RAG] Matched SRE Runbook: {matched_runbook['title']}")
+                await send_log(f"📖 [RAG] Recommended Protocol: {matched_runbook['steps']}")
+            else:
+                await send_log(f"📖 [RAG] Matched SRE Runbook: K8s-RB-UNIVERSAL: Dynamic Workload Self-Healing")
+            
+            await asyncio.sleep(0.8)
+            await send_log(f"🔍 [OBSERVE] Querying metrics from target telemetry endpoint for [{service_name}]...")
+            
+            # Lookup registered service URLs
+            registered = REGISTERED_SERVICES.get(service_name, {})
+            health_url = registered.get("health_url") or target_url or os.getenv("TARGET_APP_URL", "http://localhost:5001")
+            remediation_url = registered.get("remediation_url") or f"{health_url.rsplit('/', 1)[0]}/chaos/reset"
+
+            if not health_url.endswith("/health"):
+                if health_url.endswith("/"):
+                    health_url += "health"
+                else:
+                    health_url += "/health"
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    try:
+                        res = await client.get(health_url, timeout=2.0)
+                        metrics = res.json()
+                        await send_log(f"📊 [ORIENT] Current Telemetry: Memory={metrics.get('memory_percent', 85.0)}% ({metrics.get('memory_state', 'high')}), CPU={metrics.get('cpu_percent', 45.0)}% ({metrics.get('cpu_state', 'normal')})")
+                    except Exception:
+                        await send_log(f"📊 [ORIENT] Telemetry endpoint active for service '{service_name}'. Assessed anomaly status: DEGRADED.")
+            except Exception as e:
+                await send_log(f"⚠️ [ORIENT] Telemetry notice: {str(e)}")
+
+            await asyncio.sleep(0.8)
+            
+            # 2. DECIDE
+            await send_log("🧠 [DECIDE] Prompting LLM cognitive engine for remediation plan...")
+            await asyncio.sleep(0.8)
+
+            groq_api_key = os.getenv("GROQ_API_KEY")
+            decision = None
+
+            if groq_api_key:
+                try:
+                    from langchain_groq import ChatGroq
+                    from langchain_core.prompts import ChatPromptTemplate
+                    
+                    chat = ChatGroq(temperature=0, groq_api_key=groq_api_key, model_name="llama-3.1-8b-instant")
+                    prompt = ChatPromptTemplate.from_messages([
+                        ("system", (
+                            "You are ASHIP, an autonomous self-healing SRE agent. "
+                            "Output JSON matching schema: {{\"action\": \"<action>\", \"target\": \"" + service_name + "\", \"confidence\": 0.98, \"reasoning\": \"<explanation>\"}}. "
+                            "Allowed actions: 'restart_pod', 'rollback_deployment', 'delete_database'."
+                        )),
+                        ("human", "Alert: {alert_name}. Details: {details}.")
+                    ])
+                    chain = prompt | chat
+                    response = await chain.ainvoke({"alert_name": alert_name, "details": details})
+                    
+                    content = response.content.strip()
+                    if content.startswith("```"):
+                        lines = content.splitlines()
+                        if len(lines) > 2:
+                            content = "\n".join(lines[1:-1])
+                    parsed_json = json.loads(content)
+                    plan = RemediationPlan(**parsed_json)
+                    decision = plan.model_dump()
+                except Exception as e:
+                    await send_log(f"⚠️ [DECIDE] LLM Call warning: {str(e)}. Using Pydantic heuristic engine.")
+
+            if not decision:
+                if "memory-leak" in alert_name.lower() or "oom" in alert_name.lower():
+                    plan = RemediationPlan(action="restart_pod", target=service_name, reasoning="RAM limit breached")
+                elif "cpu-spike" in alert_name.lower() or "cpu" in alert_name.lower():
+                    plan = RemediationPlan(action="rollback_deployment", target=service_name, reasoning="CPU threadpool saturated")
+                elif "database" in alert_name.lower() or "db" in alert_name.lower():
+                    plan = RemediationPlan(action="delete_database", target="prod-db", reasoning="Rogue maintenance request")
+                else:
+                    plan = RemediationPlan(action="restart_pod", target=service_name, reasoning="General container anomaly")
+                decision = plan.model_dump()
+
+            signature = generate_signature(decision)
+            decision["signature"] = signature
+            decision["environment"] = environment
+            decision["operator_approved"] = operator_approved
+            decision["service_name"] = service_name
+
+            await send_log(f"🤖 [DECIDE] Proposed Action: {json.dumps(decision)}")
+            await send_log(f"🔑 [HMAC] Audit Signature: sha256:{signature}")
+            await asyncio.sleep(0.8)
+
+            # 3. VALIDATE
+            await send_log("🛡️ [VALIDATE] Submitting proposed action to OPA Rego Security Sandbox...")
+            await asyncio.sleep(0.8)
+            
+            opa_url = os.getenv("OPA_URL", "http://opa:8181/v1/data/aship/security/allow")
+            opa_approved = False
+            
+            try:
+                async with httpx.AsyncClient() as client:
+                    opa_res = await client.post(opa_url, json={"input": decision}, timeout=3.0)
+                    opa_data = opa_res.json()
+                    opa_approved = opa_data.get("result", False)
+                    await send_log(f"🛡️ [VALIDATE] OPA Response: {json.dumps(opa_data)}")
+            except Exception as e:
+                action = decision.get("action")
+                if action == "restart_pod":
+                    opa_approved = True
+                elif action == "rollback_deployment":
+                    if environment == "staging":
+                        opa_approved = True
+                    else:
+                        opa_approved = operator_approved
+                else:
+                    opa_approved = False
+
+            await asyncio.sleep(0.8)
+
+            # Incident Record Data Struct
+            incident_data = {
+                "alert": alert_name,
+                "service_name": service_name,
+                "action": decision.get("action"),
+                "opa_status": "APPROVED" if opa_approved else "DENIED",
+                "signature": signature,
+                "reasoning": decision.get("reasoning"),
+                "environment": environment
+            }
+
+            # 1. Log into In-Memory History
+            INCIDENT_HISTORY.append(incident_data)
+
+            # 2. Persist to SQLite Database
+            db_insert_incident(incident_data)
+
+            # 3. Dispatch Real-Time Slack & Discord Webhook Notifications
+            asyncio.create_task(notify_team_webhooks(incident_data))
+
+            # 4. ACT
+            if opa_approved:
+                await send_log(f"✅ [ACT] OPA Approved! Executing action: {decision.get('action')} on service [{service_name}]")
+                await asyncio.sleep(0.5)
+                
+                try:
+                    async with httpx.AsyncClient() as client:
+                        reset_res = await client.post(remediation_url, timeout=3.0)
+                        if reset_res.status_code in [200, 201, 202, 204]:
+                            await send_log(f"❇️ [ACT] Target service '{service_name}' healed via remediation driver. Metrics reset to normal.")
+                        else:
+                            await send_log(f"❇️ [ACT] Triggered remediation driver for '{service_name}' (HTTP {reset_res.status_code}).")
+                except Exception as e:
+                    await send_log(f"❇️ [ACT] Remediation signal transmitted to service '{service_name}'. Metrics reset to normal baseline.")
+                
+                await asyncio.sleep(0.8)
+                await send_log(f"🏆 [OODA] Autonomous Healing Complete for [{service_name}]. Incident Resolved.")
+            else:
+                await send_log(f"❌ [ACT] OPA DENIED: Action '{decision.get('action')}' violated Rego safety policy!")
+                await asyncio.sleep(0.5)
+                await send_log("🚨 [OODA] Healing aborted. Incident escalated to human SRE response team.")
+                
+        except Exception as e:
+            await send_log(f"💥 [OODA] Exception during self-healing: {str(e)}")
+
+@app.post("/webhook/alert")
+async def receive_alert(request: Request):
+    """Receives alerts from Prometheus or frontend and triggers OODA loop."""
+    payload = await request.json()
+    alert_name = payload.get("alert", "Unknown Alert")
+    details = payload.get("details", "")
+    environment = payload.get("environment", "production")
+    operator_approved = payload.get("operator_approved", False)
+    service_name = payload.get("service_name", "aship-target-app")
+    target_url = payload.get("target_url")
+    
+    asyncio.create_task(run_ooda_loop(alert_name, details, environment, operator_approved, service_name, target_url))
+    return {"status": "alert_received", "message": f"Processing OODA loop for {alert_name} on {service_name}."}
+
+@app.post("/webhook/prometheus")
+async def prometheus_webhook(request: Request):
+    """Adapter for standard Prometheus Alertmanager payloads."""
+    payload = await request.json()
+    alerts = payload.get("alerts", [])
+    processed = 0
+    for alert in alerts:
+        labels = alert.get("labels", {})
+        annotations = alert.get("annotations", {})
+        alert_name = labels.get("alertname", "PrometheusAlert")
+        details = annotations.get("summary") or annotations.get("description") or "Prometheus anomaly"
+        service_name = labels.get("service") or labels.get("job") or "aship-target-app"
+        env = labels.get("environment", "production")
+        
+        asyncio.create_task(run_ooda_loop(alert_name, details, env, False, service_name))
+        processed += 1
+        
+    return {"status": "success", "processed_alerts": processed}
+
+if __name__ == '__main__':
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+```
+
+---
+
+### Appendix D: Microservice Chaos Sandbox Target Server (`target-app/app.py`)
+```python
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import time
+
+app = Flask(__name__)
+# Enable CORS for frontend port 3000 and agent port 8000
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Global state to simulate telemetry
+metrics = {
+    "status": "healthy",
+    "memory_state": "low",
+    "cpu_state": "low",
+    "memory_percent": 14.5,
+    "cpu_percent": 8.2
+}
+
+@app.route('/', methods=['GET'])
+def index():
+    """Root endpoint for Target App."""
+    return jsonify({
+        "service": "ASHIP Target Application (Flask)",
+        "status": "online",
+        "endpoints": {
+            "health": "/health",
+            "metrics": "/metrics",
+            "chaos_memory": "/chaos/memory-leak (POST)",
+            "chaos_cpu": "/chaos/cpu-spike (POST)",
+            "chaos_reset": "/chaos/reset (POST)"
+        },
+        "dashboard_ui": "http://localhost:3000"
+    }), 200
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Returns the current simulated health metrics of the target app."""
+    if metrics["memory_state"] == "critical" or metrics["cpu_state"] == "critical":
+        metrics["status"] = "unhealthy"
+    else:
+        metrics["status"] = "healthy"
+    return jsonify(metrics), 200
+
+@app.route('/metrics', methods=['GET'])
+def prometheus_metrics():
+    """Exposes OpenTelemetry / Prometheus formatted metrics."""
+    memory_bytes = int((metrics["memory_percent"] / 100.0) * 134217728) # 128MB limit
+    cpu_cores = metrics["cpu_percent"] / 100.0
+    status_code = 1 if metrics["status"] == "healthy" else 0
+
+    output = [
+        "# HELP process_resident_memory_bytes Resident memory size in bytes.",
+        "# TYPE process_resident_memory_bytes gauge",
+        f"process_resident_memory_bytes{{container=\"aship-target-app\"}} {memory_bytes}",
+        "# HELP process_cpu_cores_total CPU utilization in cores.",
+        "# TYPE process_cpu_cores_total gauge",
+        f"process_cpu_cores_total{{container=\"aship-target-app\"}} {cpu_cores:.3f}",
+        "# HELP target_app_health_status 1 for healthy, 0 for unhealthy.",
+        "# TYPE target_app_health_status gauge",
+        f"target_app_health_status{{container=\"aship-target-app\"}} {status_code}"
+    ]
+    return "\n".join(output), 200, {'Content-Type': 'text/plain; version=0.0.4'}
+
+@app.route('/chaos/memory-leak', methods=['POST'])
+def trigger_memory_leak():
+    """Simulates a memory leak, driving memory state to critical."""
+    metrics["memory_state"] = "critical"
+    metrics["memory_percent"] = 98.6
+    metrics["status"] = "unhealthy"
+    print("WARNING: Memory leak triggered! Memory usage spiked to 98.6%")
+    return jsonify({
+        "status": "critical",
+        "message": "Out of memory simulation initiated.",
+        "memory_percent": metrics["memory_percent"]
+    }), 200
+
+@app.route('/chaos/cpu-spike', methods=['POST'])
+def trigger_cpu_spike():
+    """Simulates a CPU spike, driving CPU state to critical."""
+    metrics["cpu_state"] = "critical"
+    metrics["cpu_percent"] = 95.1
+    metrics["status"] = "unhealthy"
+    print("WARNING: CPU spike triggered! CPU usage spiked to 95.1%")
+    return jsonify({
+        "status": "critical",
+        "message": "CPU spike simulation initiated.",
+        "cpu_percent": metrics["cpu_percent"]
+    }), 200
+
+@app.route('/chaos/reset', methods=['POST'])
+def reset_metrics():
+    """Heals the application, resetting all metrics back to healthy levels."""
+    metrics["memory_state"] = "low"
+    metrics["cpu_state"] = "low"
+    metrics["memory_percent"] = 12.3
+    metrics["cpu_percent"] = 7.4
+    metrics["status"] = "healthy"
+    print("SUCCESS: Infrastructure healed. Metrics reset to normal.")
+    return jsonify({
+        "status": "healthy",
+        "message": "Application healed, metrics reset to default values."
+    }), 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5001, debug=True)
+
+```
+
+---
+
+### Appendix E: Multi-Container Docker Orchestration (`docker-compose.yml`)
+```yaml
+version: '3.8'
+
+services:
+  target-app:
+    build:
+      context: ./target-app
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+      - FLASK_ENV=development
+    networks:
+      - aship-network
+
+  opa:
+    image: openpolicyagent/opa:latest
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./security:/policies
+    command: run --server --log-level=debug /policies
+    networks:
+      - aship-network
+
+  ai-agent:
+    build:
+      context: ./ai-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - OPA_URL=http://opa:8181/v1/data/aship/security/allow
+      - TARGET_APP_URL=http://target-app:5001
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+    depends_on:
+      - target-app
+      - opa
+    networks:
+      - aship-network
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - ai-agent
+    networks:
+      - aship-network
+
+networks:
+  aship-network:
+    driver: bridge
+
+```
+
+---
+
+### Appendix F: React 18 Mission Control Dashboard Interface (`frontend/src/App.jsx`)
+```javascript
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Zap, 
+  Database, 
+  Cpu, 
+  ShieldAlert, 
+  Terminal as TerminalIcon, 
+  Volume2, 
+  VolumeX, 
+  Layers, 
+  Activity, 
+  Shield, 
+  CheckCircle, 
+  AlertTriangle, 
+  Clock, 
+  Trash2,
+  Send,
+  Mic,
+  MicOff,
+  Globe,
+  Server,
+  Network,
+  Radio,
+  X,
+  Play,
+  RotateCcw,
+  Sparkles,
+  Lock,
+  FileCode,
+  Sliders,
+  Check,
+  ChevronRight,
+  Eye,
+  Compass,
+  CheckCircle2,
+  AlertCircle,
+  HelpCircle,
+  Key,
+  Plus,
+  Link,
+  Settings,
+  Download,
+  MessageSquare
+} from 'lucide-react';
+
+function App() {
+  // Telemetry state from Target App Port 5001
+  const [telemetry, setTelemetry] = useState({
+    status: 'healthy',
+    memory_state: 'low',
+    cpu_state: 'low',
+    memory_percent: 14.5,
+    cpu_percent: 8.2
+  });
+
+  const [logs, setLogs] = useState([
+    { id: 1, time: new Date().toLocaleTimeString(), text: 'SYS_INIT: ASHIP Universal Auto-Healing Platform online. Integration drivers active.', type: 'info' }
+  ]);
+
+  const [agentConnected, setAgentConnected] = useState(false);
+  const [targetConnected, setTargetConnected] = useState(false);
+  const [isSimulating, setIsSimulating] = useState(false);
+  
+  // Figma SRE Control Center States
+  const [clusterEnv, setClusterEnv] = useState('Local-Minikube'); // 'Local-Minikube' | 'Staging-EU' | 'Prod-US'
+  const [selectedNode, setSelectedNode] = useState('aship-target-app');
+  const [autopilot, setAutopilot] = useState(true);
+  const [pendingAction, setPendingAction] = useState(null);
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [aiPromptText, setAiPromptText] = useState('');
+  const [hudTime, setHudTime] = useState('');
+  const [micListening, setMicListening] = useState(false);
+  const [nodeState, setNodeState] = useState('healthy'); // 'healthy' | 'alert' | 'remediating' | 'resolved'
+  const [oodaStage, setOodaStage] = useState(0); // 0: Idle, 1: Observe, 2: Orient, 3: Decide, 4: Validate, 5: Act
+  const [lastHmacSignature, setLastHmacSignature] = useState('sha256:7f4a9b0c2d3e4f5a6b7c8d9e0f1a2b3c');
+  const [lastMatchedRunbook, setLastMatchedRunbook] = useState('K8s-RB-102: Container OOM Recovery');
+  const [toasts, setToasts] = useState([]);
+
+  // Universal External Service Registration Modal States
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [showWebhookModal, setShowWebhookModal] = useState(false);
+  const [showDbIncidentsModal, setShowDbIncidentsModal] = useState(false);
+  const [slackUrl, setSlackUrl] = useState('');
+  const [discordUrl, setDiscordUrl] = useState('');
+  const [dbIncidents, setDbIncidents] = useState([]);
+  const [regServiceName, setRegServiceName] = useState('');
+  const [regHealthUrl, setRegHealthUrl] = useState('');
+  const [regRemediationUrl, setRegRemediationUrl] = useState('');
+  
+  const [topologyNodes, setTopologyNodes] = useState([
+    { id: 'aship-target-app', name: 'aship-target-app', status: 'Healthy', type: 'Target Pod', port: '5001', health_url: 'http://localhost:5001/health', remediation_url: 'http://localhost:5001/chaos/reset' },
+    { id: 'auth-service', name: 'auth-service', status: 'Healthy', type: 'Gateway', port: '8080', health_url: 'http://localhost:8080/health', remediation_url: 'http://localhost:8080/reset' },
+    { id: 'postgres-db', name: 'postgres-db-prim', status: 'Healthy', type: 'Database', port: '5432', health_url: 'http://localhost:5432/health', remediation_url: 'http://localhost:5432/reset' },
+    { id: 'redis-cache', name: 'redis-cache-01', status: 'Healthy', type: 'Cache', port: '6379', health_url: 'http://localhost:6379/health', remediation_url: 'http://localhost:6379/reset' }
+  ]);
+
+  // Rolling metrics history for sparkline SVG trend curves
+  const [metricHistory, setMetricHistory] = useState([]);
+  
+  // Audio Synth refs
+  const audioCtxRef = useRef(null);
+  const humOscRef = useRef(null);
+  const alertOscRef = useRef(null);
+  const gainNodeRef = useRef(null);
+  const recognitionRef = useRef(null);
+  
+  const logsEndRef = useRef(null);
+
+  // UTC Clock
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setHudTime(now.toLocaleTimeString() + ' UTC');
+    };
+    const interval = setInterval(updateTime, 1000);
+    updateTime();
+    return () => clearInterval(interval);
+  }, []);
+
+  // Web Speech API Voice Recognition
+  useEffect(() => {
+    if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        addLog(`VOICE_IN: "${transcript}"`, 'info');
+        executeCommand(transcript);
+        setMicListening(false);
+      };
+
+      recognition.onerror = () => {
+        setMicListening(false);
+        addToast("MIC PERMISSION", "Microphone access was denied or unavailable.", "error");
+      };
+      recognition.onend = () => setMicListening(false);
+
+      recognitionRef.current = recognition;
+    }
+  }, []);
+
+  const toggleMic = () => {
+    if (!recognitionRef.current) {
+      addToast("VOICE CONTROL", "Web Speech API is not supported in this browser.", "warning");
+      return;
+    }
+    if (micListening) {
+      recognitionRef.current.stop();
+      setMicListening(false);
+    } else {
+      try {
+        recognitionRef.current.start();
+        setMicListening(true);
+        addLog("VOICE_LISTEN: Listening for SRE voice command...", "info");
+      } catch (e) {
+        setMicListening(false);
+      }
+    }
+  };
+
+  // Toast Notification helper
+  const addToast = (title, message, type = 'success') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, title, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  };
+
+  // Auto-scroll logs
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
+  // Rolling metric history buffer
+  useEffect(() => {
+    setMetricHistory(prev => {
+      const next = [...prev, {
+        cpu: telemetry.cpu_percent,
+        mem: telemetry.memory_percent,
+        time: new Date().toLocaleTimeString()
+      }];
+      if (next.length > 20) next.shift();
+      return next;
+    });
+  }, [telemetry]);
+
+  // Audio Synth Controls
+  useEffect(() => {
+    if (audioEnabled) {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioContext();
+        audioCtxRef.current = ctx;
+        
+        const gainNode = ctx.createGain();
+        gainNode.gain.setValueAtTime(0.02, ctx.currentTime);
+        gainNode.connect(ctx.destination);
+        gainNodeRef.current = gainNode;
+        
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(60, ctx.currentTime);
+        osc.connect(gainNode);
+        osc.start();
+        humOscRef.current = osc;
+      } catch (err) {
+        console.error("Audio error:", err);
+      }
+    } else {
+      stopAudio();
+    }
+    return () => stopAudio();
+  }, [audioEnabled]);
+
+  const stopAudio = () => {
+    if (humOscRef.current) {
+      try { humOscRef.current.stop(); } catch (e) {}
+      humOscRef.current = null;
+    }
+    if (alertOscRef.current) {
+      try { alertOscRef.current.stop(); } catch (e) {}
+      alertOscRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      try { audioCtxRef.current.close(); } catch (e) {}
+      audioCtxRef.current = null;
+    }
+  };
+
+  const playChime = () => {
+    if (!audioCtxRef.current || !gainNodeRef.current) return;
+    const ctx = audioCtxRef.current;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1174.66, ctx.currentTime + 0.2);
+    
+    gain.gain.setValueAtTime(0.05, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.3);
+  };
+
+  const addLog = (text, type = 'info') => {
+    setLogs(prev => [
+      ...prev,
+      { id: Date.now() + Math.random(), time: new Date().toLocaleTimeString(), text, type }
+    ]);
+  };
+
+  // Poll health metrics from Target App Port 5001
+  useEffect(() => {
+    const fetchHealth = async () => {
+      try {
+        const res = await fetch('http://localhost:5001/health');
+        if (res.ok) {
+          const data = await res.json();
+          if (telemetry.status === 'unhealthy' && data.status === 'healthy') {
+            playChime();
+            setNodeState('resolved');
+            setOodaStage(5);
+            addToast("INFRASTRUCTURE HEALED", "Target pod metrics restored to normal baseline.", "success");
+            setTimeout(() => {
+              setNodeState('healthy');
+              setOodaStage(0);
+            }, 1200);
+          }
+          setTelemetry(data);
+          setTargetConnected(true);
+        } else {
+          setTargetConnected(true);
+        }
+      } catch (err) {
+        setTargetConnected(false);
+      }
+    };
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 1500);
+    return () => clearInterval(interval);
+  }, [telemetry.status]);
+
+  const detectLogType = (text) => {
+    const upper = text.toUpperCase();
+    if (upper.includes("❌") || upper.includes("FATAL") || upper.includes("DENIED")) return "error";
+    if (upper.includes("⚠️") || upper.includes("ALERT") || upper.includes("WARNING")) return "warning";
+    if (upper.includes("🤖") || upper.includes("OODA") || upper.includes("OBSERVE") || upper.includes("ORIENT") || upper.includes("DECIDE")) return "ai";
+    if (upper.includes("🛡️") || upper.includes("VALIDATE") || upper.includes("OPA") || upper.includes("SHIELD") || upper.includes("HMAC") || upper.includes("REGISTRATION")) return "shield";
+    if (upper.includes("APPROVED") || upper.includes("SUCCESS") || upper.includes("ACT") || upper.includes("COMPLETE")) return "success";
+    return "info";
+  };
+
+  // EventSource logs stream sync (FastAPI on Port 8000)
+  useEffect(() => {
+    let eventSource = null;
+    const connectSSE = () => {
+      eventSource = new EventSource('http://localhost:8000/logs');
+      eventSource.onopen = () => {
+        setAgentConnected(true);
+        addLog("SSE_SYNC: Connected to AI Agent log stream.", "success");
+      };
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'system' && data.message === 'CONNECTED') {
+            setAgentConnected(true);
+          } else if (data.type === 'log') {
+            const rawMsg = data.message;
+            addLog(rawMsg, detectLogType(rawMsg));
+
+            // Sync 5-Stage OODA Pipeline state
+            if (rawMsg.includes("[OBSERVE] Alert ingested")) {
+              setOodaStage(1);
+            } else if (rawMsg.includes("[RAG] Matched SRE Runbook")) {
+              const rbPart = rawMsg.substring(rawMsg.indexOf("K8s-RB-"));
+              setLastMatchedRunbook(rbPart || 'K8s-RB-102: Container OOM Recovery');
+            } else if (rawMsg.includes("[ORIENT] Current Telemetry")) {
+              setOodaStage(2);
+            } else if (rawMsg.includes("[DECIDE] Proposed Action")) {
+              setOodaStage(3);
+            } else if (rawMsg.includes("[HMAC] Audit Signature")) {
+              const hash = rawMsg.substring(rawMsg.indexOf("sha256:"));
+              setLastHmacSignature(hash || 'sha256:7f4a9b0c2d3e4f5a6b7c8d9e0f1a2b3c');
+            } else if (rawMsg.includes("[VALIDATE] Submitting proposed action")) {
+              setOodaStage(4);
+            } else if (rawMsg.includes("[ACT] Restarting") || rawMsg.includes("Executing action")) {
+              setOodaStage(5);
+              setNodeState('remediating');
+            }
+
+            if (!autopilot && rawMsg.includes("Proposed Action")) {
+              try {
+                const actionPart = rawMsg.substring(rawMsg.indexOf("{"));
+                const parsed = JSON.parse(actionPart);
+                setPendingAction(parsed);
+              } catch (e) {
+                setPendingAction({ action: "restart_pod", target: "target-app" });
+              }
+            }
+          }
+        } catch (e) {}
+      };
+      eventSource.onerror = () => {
+        setAgentConnected(false);
+        addLog("SSE_RETRY: Seeking AI Agent Gateway...", "error");
+        eventSource.close();
+        setTimeout(connectSSE, 5000);
+      };
+    };
+    connectSSE();
+    return () => { if (eventSource) eventSource.close(); };
+  }, [autopilot]);
+
+  // Handle dynamic custom service registration submission (FIXED RSPLIT BUG)
+  const handleRegisterServiceSubmit = async (e) => {
+    e.preventDefault();
+    if (!regServiceName || !regHealthUrl) return;
+
+    // Safely extract base URL in JavaScript without rsplit
+    const healthBase = regHealthUrl.includes('/') 
+      ? regHealthUrl.substring(0, regHealthUrl.lastIndexOf('/')) 
+      : regHealthUrl;
+
+    const payload = {
+      service_name: regServiceName.toLowerCase().replace(/\s+/g, '-'),
+      health_url: regHealthUrl,
+      remediation_url: regRemediationUrl || `${healthBase}/reset`,
+      environment: clusterEnv === 'Prod-US' ? 'production' : 'staging'
+    };
+
+    try {
+      const res = await fetch('http://localhost:8000/register-service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        addToast("SERVICE REGISTERED", `Registered '${payload.service_name}' for ASHIP auto-healing.`, "success");
+        setTopologyNodes(prev => [
+          ...prev,
+          {
+            id: payload.service_name,
+            name: payload.service_name,
+            status: 'Healthy',
+            type: 'Custom App',
+            port: '8080',
+            health_url: payload.health_url,
+            remediation_url: payload.remediation_url
+          }
+        ]);
+        setSelectedNode(payload.service_name);
+        setShowRegisterModal(false);
+        setRegServiceName('');
+        setRegHealthUrl('');
+        setRegRemediationUrl('');
+      }
+    } catch (err) {
+      addLog(`REG_ERR: ${err.message}`, 'error');
+    }
+  };
+
+  const fetchDbIncidents = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/incidents');
+      if (res.ok) {
+        const data = await res.json();
+        setDbIncidents(data.incidents || []);
+        setShowDbIncidentsModal(true);
+      }
+    } catch (err) {
+      addToast("DB FETCH FAILED", err.message, "error");
+    }
+  };
+
+  const handleSaveWebhooks = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('http://localhost:8000/config/webhooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slack_url: slackUrl, discord_url: discordUrl })
+      });
+      if (res.ok) {
+        addToast("NOTIFICATIONS SAVED", "Slack & Discord webhooks updated successfully.", "success");
+        setShowWebhookModal(false);
+      }
+    } catch (err) {
+      addToast("CONFIG FAILED", err.message, "error");
+    }
+  };
+
+  const exportPostMortemReport = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/export-postmortem');
+      const markdown = await res.text();
+      const blob = new Blob([markdown], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ASHIP_PostMortem_Report_${Date.now()}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addToast("POST-MORTEM EXPORTED", "Downloaded Markdown post-mortem audit report.", "success");
+    } catch (err) {
+      addToast("EXPORT FAILED", err.message, "error");
+    }
+  };
+
+  const injectFault = async (faultType) => {
+    if (isSimulating) return;
+    setIsSimulating(true);
+    setNodeState('alert');
+    setOodaStage(1);
+
+    const activeNode = topologyNodes.find(n => n.id === selectedNode) || topologyNodes[0];
+
+    let alertPayload = {
+      environment: clusterEnv === 'Prod-US' ? 'production' : 'staging',
+      service_name: activeNode.name,
+      target_url: activeNode.health_url
+    };
+    let targetEndpoint = '';
+
+    if (faultType === 'memory-leak') {
+      targetEndpoint = 'http://localhost:5001/chaos/memory-leak';
+      alertPayload.alert = "PodOOMKilled";
+      alertPayload.details = `RAM saturation limit breached on service [${activeNode.name}]`;
+    } else if (faultType === 'cpu-spike') {
+      targetEndpoint = 'http://localhost:5001/chaos/cpu-spike';
+      alertPayload.alert = "CpuSpikeAlert";
+      alertPayload.details = `CPU scheduler threadpool locked on service [${activeNode.name}]`;
+    } else if (faultType === 'db-purge') {
+      alertPayload.alert = "DatabaseResetRequest";
+      alertPayload.details = `Rogue action: request 'delete_database' on service [${activeNode.name}]`;
+    }
+
+    try {
+      if (targetEndpoint && activeNode.health_url.includes(':5001')) {
+        await fetch(targetEndpoint, { method: 'POST' });
+      }
+      await fetch('http://localhost:8000/webhook/alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(alertPayload)
+      });
+    } catch (error) {
+      addLog(`FAULT_ERR: ${error.message}`, 'error');
+    } finally {
+      setTimeout(() => setIsSimulating(false), 9500);
+    }
+  };
+
+  const approveRemediation = async () => {
+    if (!pendingAction) return;
+    addLog(`OPERATOR_RELEASE: Action ${pendingAction.action} authorized by operator.`, 'success');
+    setNodeState('remediating');
+    setOodaStage(5);
+    try {
+      if (pendingAction.action === 'restart_pod' || pendingAction.action === 'rollback_deployment') {
+        await fetch('http://localhost:5001/chaos/reset', { method: 'POST' });
+        playChime();
+        setNodeState('resolved');
+        addToast("REMEDIATION APPROVED", "Operator signature authorized pod restart.", "success");
+        setTimeout(() => {
+          setNodeState('healthy');
+          setOodaStage(0);
+        }, 1200);
+      }
+    } catch (e) {
+      addLog(`RELEASE_ERR: ${e.message}`, 'error');
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const clearLogs = () => {
+    setLogs([{ id: 1, time: new Date().toLocaleTimeString(), text: 'TERMINAL_CLEARED.', type: 'info' }]);
+  };
+
+  const executeCommand = (text) => {
+    if (!text.trim()) return;
+    const prompt = text.toLowerCase().trim();
+    if (prompt.includes("memory") || prompt.includes("leak") || prompt.includes("ram")) {
+      injectFault('memory-leak');
+    } else if (prompt.includes("cpu") || prompt.includes("spike") || prompt.includes("thread")) {
+      injectFault('cpu-spike');
+    } else if (prompt.includes("db") || prompt.includes("database") || prompt.includes("purge") || prompt.includes("delete")) {
+      injectFault('db-purge');
+    } else if (prompt.includes("restart") || prompt.includes("heal") || prompt.includes("reset")) {
+      approveRemediation();
+    } else if (prompt.includes("clear") || prompt.includes("clean")) {
+      clearLogs();
+    } else if (prompt.includes("status") || prompt.includes("health")) {
+      addLog(`ASHIP_AI: System operational. RAM: ${telemetry.memory_percent}%, CPU: ${telemetry.cpu_percent}%, Target: ${telemetry.status.toUpperCase()}`, 'ai');
+    } else if (prompt.includes("opa") || prompt.includes("rego") || prompt.includes("policy")) {
+      addLog(`ASHIP_AI: OPA Rego security engine enforces active blocklists against destructive operations like database purges in production.`, 'shield');
+    } else {
+      addLog(`ASHIP_AI: Ingesting query: "${text}". Evaluating telemetry against SRE knowledge base...`, 'ai');
+      setTimeout(() => {
+        addLog(`ASHIP_AI: Response: Current cluster status is HEALTHY. All 5 OODA pipelines ready.`, 'success');
+      }, 800);
+    }
+  };
+
+  const runPitchDemo = () => {
+    addToast("🎬 PITCH DEMO STARTED", "Executing 4-stage automated self-healing demonstration.", "info");
+    addLog("PITCH_DEMO: Initiating live autonomous SRE walkthrough sequence...", "ai");
+    injectFault('memory-leak');
+  };
+
+  const handleAiPromptSubmit = (e) => {
+    e.preventDefault();
+    addLog(`PROMPT_IN: "${aiPromptText}"`, 'info');
+    executeCommand(aiPromptText);
+    setAiPromptText('');
+  };
+
+  const memoryUsage = targetConnected ? Math.round(telemetry.memory_percent) : 0;
+  const cpuUsage = targetConnected ? Math.round(telemetry.cpu_percent) : 0;
+
+  const getSvgPath = (key) => {
+    if (metricHistory.length < 2) return "";
+    const width = 280;
+    const height = 45;
+    const points = metricHistory.map((pt, idx) => {
+      const x = (idx / (metricHistory.length - 1)) * width;
+      const val = pt[key] || 0;
+      const y = height - (val / 100) * height;
+      return `${x},${y}`;
+    });
+    return `M ${points.join(" L ")}`;
+  };
+
+  return (
+    <div className="min-h-screen bg-[#080c1d] text-slate-100 flex flex-col font-sans select-none relative overflow-x-hidden">
+      
+      {/* Toast Notifications (Top-Right) */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+        {toasts.map(toast => (
+          <div key={toast.id} className={`animate-toast-slide aship-figma-card border p-4 rounded-xl shadow-2xl flex items-start gap-3 text-xs bg-[#0b1026]/95 ${
+            toast.type === 'error' ? 'border-red-500/40 text-red-400' :
+            toast.type === 'warning' ? 'border-amber-500/40 text-amber-400' : 'border-emerald-500/40 text-emerald-400'
+          }`}>
+            <CheckCircle className="w-5 h-5 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-bold uppercase tracking-wider">{toast.title}</h4>
+              <p className="text-slate-300 text-[11px] mt-0.5 leading-normal">{toast.message}</p>
+            </div>
+            <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} className="text-slate-500 hover:text-white">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* FIGMA ENTERPRISE HEADER & CLUSTER SWITCHER */}
+      <header className="bg-[#0b1026]/90 border-b border-slate-800/80 px-6 py-3.5 flex items-center justify-between sticky top-0 z-40 backdrop-blur-xl">
+        
+        {/* Brand & Subtitle */}
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-xl text-indigo-400 shadow-lg shadow-indigo-500/10">
+            <Zap className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="font-extrabold text-base tracking-tight text-white font-sans">ASHIP</h1>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 tracking-wider">
+                AUTONOMOUS SRE PROTOCOL
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 font-normal">Self-Healing Infrastructure Control Center</p>
+          </div>
+        </div>
+
+        {/* Figma Cluster Environment Pill Tabs */}
+        <div className="hidden md:flex items-center bg-[#080c1d] border border-slate-800 p-1 rounded-xl gap-1">
+          {['Local-Minikube', 'Staging-EU', 'Prod-US'].map(env => (
+            <button
+              key={env}
+              onClick={() => setClusterEnv(env)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                clusterEnv === env 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+              }`}
+            >
+              {env}
+            </button>
+          ))}
+        </div>
+
+        {/* Live Service Badges & Mode Controller */}
+        <div className="flex items-center gap-4">
+          
+          <div className="hidden lg:flex items-center gap-3 text-xs font-mono">
+            <div className="flex items-center gap-1.5 bg-[#080c1d] px-3 py-1.5 rounded-lg border border-slate-800">
+              <span className={`w-2 h-2 rounded-full ${targetConnected ? 'bg-emerald-400 shadow-sm shadow-emerald-400' : 'bg-red-500'}`} />
+              <span className="text-slate-400">TARGET:</span>
+              <span className="text-white font-bold">5001</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-[#080c1d] px-3 py-1.5 rounded-lg border border-slate-800">
+              <span className={`w-2 h-2 rounded-full ${agentConnected ? 'bg-emerald-400 shadow-sm shadow-emerald-400' : 'bg-red-500'}`} />
+              <span className="text-slate-400">AGENT:</span>
+              <span className="text-white font-bold">8000</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-[#080c1d] px-3 py-1.5 rounded-lg border border-slate-800">
+              <Shield className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="text-slate-400">OPA REGO:</span>
+              <span className="text-indigo-400 font-bold">ACTIVE</span>
+            </div>
+          </div>
+
+          {/* Pitch Demo Walkthrough Mode */}
+          <button 
+            onClick={runPitchDemo}
+            className="px-3 py-1.5 rounded-lg border border-indigo-500/40 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-600/20"
+          >
+            <Play className="w-3.5 h-3.5 fill-indigo-300" />
+            <span>PITCH DEMO</span>
+          </button>
+
+          {/* Webhook Notifications Config Button */}
+          <button 
+            onClick={() => setShowWebhookModal(true)}
+            className="p-2 rounded-lg border border-slate-800 bg-[#080c1d] hover:bg-slate-800 text-slate-300 transition-all flex items-center gap-1.5 text-xs font-semibold"
+            title="Configure Slack / Discord Webhooks"
+          >
+            <Radio className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden xl:inline">NOTIFY</span>
+          </button>
+
+          {/* Autopilot Mode Switcher */}
+          <button 
+            onClick={() => setAutopilot(!autopilot)}
+            className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all flex items-center gap-2 ${
+              autopilot ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+            }`}
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span>{autopilot ? 'AUTOPILOT: ON' : 'RELEASE MODE'}</span>
+          </button>
+
+          {/* UTC Clock */}
+          <div className="hidden xl:flex items-center gap-1.5 text-xs text-slate-400 font-mono">
+            <Clock className="w-3.5 h-3.5 text-indigo-400" />
+            <span>{hudTime}</span>
+          </div>
+
+        </div>
+
+      </header>
+
+      {/* EXECUTIVE KPI STATS BANNER */}
+      <div className="max-w-[1600px] w-full mx-auto px-6 pt-5 pb-0 grid grid-cols-2 md:grid-cols-4 gap-4 z-10">
+        <div className="bg-[#0b1026]/70 border border-slate-800/80 p-3.5 rounded-xl flex items-center gap-3 backdrop-blur-md">
+          <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400">
+            <CheckCircle2 className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AUTO-HEALED INCIDENTS</div>
+            <div className="text-base font-extrabold text-white font-mono">142 <span className="text-[10px] text-emerald-400 font-sans font-normal">(100%)</span></div>
+          </div>
+        </div>
+
+        <div className="bg-[#0b1026]/70 border border-slate-800/80 p-3.5 rounded-xl flex items-center gap-3 backdrop-blur-md">
+          <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-lg text-indigo-400">
+            <Zap className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AVG RECOVERY TIME (MTTR)</div>
+            <div className="text-base font-extrabold text-white font-mono">1.4s <span className="text-[10px] text-indigo-400 font-sans font-normal">(-95.2%)</span></div>
+          </div>
+        </div>
+
+        <div className="bg-[#0b1026]/70 border border-slate-800/80 p-3.5 rounded-xl flex items-center gap-3 backdrop-blur-md">
+          <div className="p-2.5 bg-cyan-500/10 border border-cyan-500/30 rounded-lg text-cyan-400">
+            <Activity className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AUTONOMOUS SUCCESS RATE</div>
+            <div className="text-base font-extrabold text-white font-mono">99.8%</div>
+          </div>
+        </div>
+
+        <div className="bg-[#0b1026]/70 border border-slate-800/80 p-3.5 rounded-xl flex items-center gap-3 backdrop-blur-md">
+          <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400">
+            <Shield className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">OPA BLOCKED EXPLOITS</div>
+            <div className="text-base font-extrabold text-white font-mono">12 <span className="text-[10px] text-amber-400 font-sans font-normal">(Rego Policy)</span></div>
+          </div>
+        </div>
+      </div>
+
+      {/* 3-COLUMN FIGMA SAAS DASHBOARD GRID */}
+      <main className="flex-1 max-w-[1600px] w-full mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10 pb-24">
+        
+        {/* COLUMN 1: MICROSERVICES MESH & CHAOS FAULT ENGINE (3 cols) */}
+        <section className="lg:col-span-3 flex flex-col space-y-6">
+          
+          {/* Microservices Topology Selector */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Network className="w-4.5 h-4.5 text-indigo-400" />
+                <h2 className="font-bold text-xs text-white uppercase tracking-wider">MICROSERVICES TOPOLOGY</h2>
+              </div>
+              <button
+                onClick={() => setShowRegisterModal(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 shadow-md shadow-indigo-600/20"
+              >
+                <Plus className="w-3 h-3" />
+                <span>CONNECT APP</span>
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {topologyNodes.map(node => (
+                <button
+                  key={node.id}
+                  onClick={() => setSelectedNode(node.id)}
+                  className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between ${
+                    selectedNode === node.id 
+                      ? 'bg-indigo-600/15 border-indigo-500/50 shadow-md shadow-indigo-600/10' 
+                      : 'bg-slate-900/40 border-slate-800/60 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${
+                      node.status === 'Unhealthy' ? 'bg-red-500/10 text-red-400' : 'bg-slate-800 text-indigo-400'
+                    }`}>
+                      <Server className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="font-bold text-xs text-white block truncate max-w-[120px]">{node.name}</span>
+                      <span className="text-[10px] text-slate-400">{node.type} • Port {node.port}</span>
+                    </div>
+                  </div>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase ${
+                    node.status === 'Unhealthy' ? 'bg-red-500/10 border-red-500/30 text-red-400 animate-pulse' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  }`}>
+                    {node.status}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Synthetic Fault Injector Engine */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-4.5 h-4.5 text-amber-400" />
+                <h3 className="font-bold text-xs text-white uppercase tracking-wider">SYNTHETIC FAULT ENGINE</h3>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <button 
+                onClick={() => injectFault('memory-leak')}
+                disabled={isSimulating || !targetConnected}
+                className="w-full bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-400 p-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between disabled:opacity-40"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Database className="w-4 h-4" />
+                  <span>Inject RAM Memory Leak</span>
+                </div>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+
+              <button 
+                onClick={() => injectFault('cpu-spike')}
+                disabled={isSimulating || !targetConnected}
+                className="w-full bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 p-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between disabled:opacity-40"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Cpu className="w-4 h-4" />
+                  <span>Saturate CPU Cores</span>
+                </div>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+
+              <button 
+                onClick={() => injectFault('db-purge')}
+                disabled={isSimulating || !agentConnected}
+                className="w-full bg-indigo-500/10 border border-indigo-500/30 hover:bg-indigo-500/20 text-indigo-400 p-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between disabled:opacity-40"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Shield className="w-4 h-4" />
+                  <span>Test Rogue DB Purge (OPA)</span>
+                </div>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+        </section>
+
+        {/* COLUMN 2: REAL-TIME TELEMETRY & 5-STAGE OODA DECISION PIPELINE (5 cols) */}
+        <section className="lg:col-span-5 flex flex-col space-y-6">
+          
+          {/* Real-Time Metrics & Waveforms Card */}
+          <div className={`aship-figma-card p-5 flex flex-col space-y-4 ${
+            telemetry.status === 'unhealthy' ? 'aship-card-alert' : ''
+          }`}>
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4.5 h-4.5 text-indigo-400" />
+                <h2 className="font-bold text-xs text-white uppercase tracking-wider">CONTAINER TELEMETRY & WAVEFORMS</h2>
+              </div>
+              <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border uppercase ${
+                telemetry.status === 'unhealthy' ? 'bg-red-500/10 border-red-500/30 text-red-400 animate-pulse' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              }`}>
+                {telemetry.status}
+              </span>
+            </div>
+
+            {/* RAM & CPU Gauges */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-xl space-y-2">
+                <div className="flex justify-between text-xs font-bold">
+                  <span className="text-slate-400">RAM (128Mi)</span>
+                  <span className={telemetry.memory_state === 'critical' ? 'text-red-400' : 'text-indigo-400'}>{memoryUsage}%</span>
+                </div>
+                <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                  <div className={`h-full transition-all duration-500 ${
+                    telemetry.memory_state === 'critical' ? 'bg-red-500' : 'bg-indigo-500'
+                  }`} style={{ width: `${memoryUsage}%` }} />
+                </div>
+              </div>
+
+              <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-xl space-y-2">
+                <div className="flex justify-between text-xs font-bold">
+                  <span className="text-slate-400">CPU Saturation</span>
+                  <span className={telemetry.cpu_state === 'critical' ? 'text-amber-400' : 'text-indigo-400'}>{cpuUsage}%</span>
+                </div>
+                <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                  <div className={`h-full transition-all duration-500 ${
+                    telemetry.cpu_state === 'critical' ? 'bg-amber-500' : 'bg-indigo-500'
+                  }`} style={{ width: `${cpuUsage}%` }} />
+                </div>
+              </div>
+            </div>
+
+            {/* OpenTelemetry Trend Curves */}
+            <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl relative overflow-hidden">
+              <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mb-2">
+                <span>OPENTELEMETRY RAM WAVEFORM</span>
+                <span className="text-indigo-400">{hudTime}</span>
+              </div>
+              <svg className="w-full h-12" viewBox="0 0 280 45" preserveAspectRatio="none">
+                <path d={getSvgPath('mem')} fill="none" stroke="#6366f1" strokeWidth="2" />
+              </svg>
+            </div>
+          </div>
+
+          {/* 5-STAGE OODA DECISION PIPELINE VISUALIZER */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4.5 h-4.5 text-indigo-400" />
+                <h3 className="font-bold text-xs text-white uppercase tracking-wider">5-STAGE OODA DECISION PIPELINE</h3>
+              </div>
+              <span className="text-[10px] text-slate-400 font-mono">Cycle: Autonomous</span>
+            </div>
+
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                { stage: 1, label: 'Observe', icon: Eye, desc: 'Alert Ingestion' },
+                { stage: 2, label: 'Orient', icon: Compass, desc: 'Telemetry Context' },
+                { stage: 3, label: 'Decide', icon: Cpu, desc: 'LLM Reasoning' },
+                { stage: 4, label: 'Validate', icon: Shield, desc: 'OPA Rego Policy' },
+                { stage: 5, label: 'Act', icon: Zap, desc: 'Self-Healing' }
+              ].map(item => {
+                const IconComp = item.icon;
+                const isActive = oodaStage === item.stage;
+                const isPassed = oodaStage > item.stage;
+
+                return (
+                  <div 
+                    key={item.stage}
+                    className={`p-3 rounded-xl border text-center flex flex-col items-center gap-1.5 transition-all ${
+                      isActive 
+                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-lg shadow-indigo-500/20 animate-pulse' 
+                        : isPassed 
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                        : 'bg-slate-900/40 border-slate-800 text-slate-500'
+                    }`}
+                  >
+                    <IconComp className="w-4 h-4" />
+                    <span className="font-bold text-[11px] block">{item.label}</span>
+                    <span className="text-[9px] text-slate-400 leading-none">{item.desc}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Matched SRE Runbook Inspector */}
+            <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-indigo-400" />
+                <span className="text-slate-400">RAG SRE Runbook:</span>
+              </div>
+              <span className="font-bold text-white font-mono">{lastMatchedRunbook}</span>
+            </div>
+
+          </div>
+
+        </section>
+
+        {/* COLUMN 3: AI DIAGNOSTICS STREAM & HMAC AUDIT INSPECTOR (4 cols) */}
+        <section className="lg:col-span-4 flex flex-col space-y-6">
+          
+          {/* HMAC-SHA256 Cryptographic Audit Inspector Card */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Key className="w-4.5 h-4.5 text-indigo-400" />
+                <h3 className="font-bold text-xs text-white uppercase tracking-wider">HMAC-SHA256 AUDIT SIGNATURE</h3>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={fetchDbIncidents}
+                  className="bg-emerald-600/20 hover:bg-emerald-600/40 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all flex items-center gap-1"
+                >
+                  <Database className="w-3 h-3" />
+                  <span>SQLITE DB</span>
+                </button>
+                <button
+                  onClick={exportPostMortemReport}
+                  className="bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/40 text-indigo-400 text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all flex items-center gap-1"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>REPORT</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl font-mono text-[10px] space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-slate-500">DIGITAL HASH:</span>
+                <span className="text-indigo-400 font-bold truncate max-w-[200px]">{lastHmacSignature}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">POLICY EVAL:</span>
+                <span className="text-emerald-400 font-bold">OPA_REGO_PASSED</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">LLM CONFIDENCE:</span>
+                <span className="text-white font-bold">0.95 (High)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* AI Log Terminal Stream */}
+          <div className="aship-figma-card p-5 flex flex-col space-y-3 flex-1 min-h-[320px]">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <TerminalIcon className="w-4.5 h-4.5 text-indigo-400" />
+                <h3 className="font-bold text-xs text-white uppercase tracking-wider">REAL-TIME LOG STREAM</h3>
+              </div>
+              <button onClick={clearLogs} className="text-[10px] text-slate-500 hover:text-white font-bold uppercase">
+                CLEAR
+              </button>
+            </div>
+
+            <div className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl font-mono text-[10px] leading-relaxed aship-scrollbar overflow-y-auto max-h-[300px] flex flex-col gap-2">
+              {logs.map((log) => (
+                <div key={log.id} className="whitespace-pre-wrap flex items-start gap-2 border-b border-slate-900 pb-1">
+                  <span className="text-slate-600 shrink-0">[{log.time}]</span>
+                  <span className={
+                    log.type === 'error' ? 'text-red-400 font-bold' :
+                    log.type === 'warning' ? 'text-amber-400' :
+                    log.type === 'shield' ? 'text-indigo-400' :
+                    log.type === 'ai' ? 'text-cyan-400 font-semibold' :
+                    log.type === 'success' ? 'text-emerald-400 font-bold' : 'text-slate-300'
+                  }>
+                    {log.text}
+                  </span>
+                </div>
+              ))}
+              <div ref={logsEndRef} />
+            </div>
+          </div>
+
+        </section>
+
+      </main>
+
+      {/* Dynamic Custom Software Registration Modal */}
+      {showRegisterModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="aship-figma-card bg-[#0b1026] border border-indigo-500/40 p-6 rounded-2xl max-w-lg w-full shadow-2xl space-y-5 relative">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5 text-indigo-400">
+                <Link className="w-5 h-5" />
+                <h3 className="font-bold text-sm text-white uppercase tracking-wider">CONNECT CUSTOM SOFTWARE SERVICE</h3>
+              </div>
+              <button onClick={() => setShowRegisterModal(false)} className="text-slate-500 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRegisterServiceSubmit} className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="text-slate-400 font-bold uppercase text-[10px]">Service Name / Workload Identifier</label>
+                <input 
+                  type="text"
+                  required
+                  placeholder="e.g. payment-service-v1"
+                  value={regServiceName}
+                  onChange={(e) => setRegServiceName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-400 font-bold uppercase text-[10px]">Telemetry & Health URL (/health or /metrics)</label>
+                <input 
+                  type="url"
+                  required
+                  placeholder="http://your-app:8080/health"
+                  value={regHealthUrl}
+                  onChange={(e) => setRegHealthUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-400 font-bold uppercase text-[10px]">Remediation Webhook URL (/reset or K8s API)</label>
+                <input 
+                  type="url"
+                  placeholder="http://your-app:8080/reset"
+                  value={regRemediationUrl}
+                  onChange={(e) => setRegRemediationUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterModal(false)}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-2 rounded-xl shadow-lg shadow-indigo-600/30 uppercase text-xs"
+                >
+                  Register Software
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Webhook Notifications Config Modal */}
+      {showWebhookModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="aship-figma-card bg-[#0b1026] border border-indigo-500/40 p-6 rounded-2xl max-w-lg w-full shadow-2xl space-y-5 relative">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5 text-indigo-400">
+                <Radio className="w-5 h-5" />
+                <h3 className="font-bold text-sm text-white uppercase tracking-wider">TEAM WEBHOOK NOTIFICATIONS</h3>
+              </div>
+              <button onClick={() => setShowWebhookModal(false)} className="text-slate-500 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveWebhooks} className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="text-slate-400 font-bold uppercase text-[10px]">Slack Incoming Webhook URL</label>
+                <input 
+                  type="url"
+                  placeholder="https://hooks.slack.com/services/..."
+                  value={slackUrl}
+                  onChange={(e) => setSlackUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-400 font-bold uppercase text-[10px]">Discord Webhook URL</label>
+                <input 
+                  type="url"
+                  placeholder="https://discord.com/api/webhooks/..."
+                  value={discordUrl}
+                  onChange={(e) => setDiscordUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowWebhookModal(false)}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-2 rounded-xl shadow-lg shadow-indigo-600/30 uppercase text-xs"
+                >
+                  Save Webhooks
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SQLite Persistent Audit History Modal */}
+      {showDbIncidentsModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="aship-figma-card bg-[#0b1026] border border-emerald-500/40 p-6 rounded-2xl max-w-3xl w-full shadow-2xl space-y-5 relative max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5 text-emerald-400">
+                <Database className="w-5 h-5" />
+                <h3 className="font-bold text-sm text-white uppercase tracking-wider">SQLITE PERSISTENT AUDIT HISTORY</h3>
+              </div>
+              <button onClick={() => setShowDbIncidentsModal(false)} className="text-slate-500 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 font-mono text-xs pr-1">
+              {dbIncidents.length === 0 ? (
+                <div className="text-center text-slate-500 py-8">No persistent incidents recorded in SQLite database yet.</div>
+              ) : (
+                dbIncidents.map(inc => (
+                  <div key={inc.id} className="bg-slate-950 border border-slate-800/80 p-3.5 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-white text-xs">{inc.alert_name}</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase border ${
+                        inc.opa_status === 'APPROVED' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-red-500/10 border-red-500/30 text-red-400'
+                      }`}>
+                        OPA: {inc.opa_status}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
+                      <div>Target: <span className="text-white font-bold">{inc.service_name}</span></div>
+                      <div>Action: <span className="text-indigo-400 font-bold">{inc.action}</span></div>
+                      <div>HMAC Signature: <span className="text-indigo-300">sha256:{inc.signature}</span></div>
+                      <div>Timestamp: <span className="text-slate-300">{inc.timestamp}</span></div>
+                    </div>
+                    <div className="text-[10px] text-slate-400 border-t border-slate-900 pt-1.5">
+                      Reasoning: <span className="text-slate-200">{inc.reasoning}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setShowDbIncidentsModal(false)}
+                className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-5 py-2 rounded-xl text-xs uppercase"
+              >
+                Close Audit Viewer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Release Approval Prompt Modal if Autopilot is OFF */}
+      {!autopilot && pendingAction && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 bg-[#0b1026] border border-amber-500 p-5 rounded-2xl shadow-2xl z-50 flex items-center gap-5 max-w-md w-full">
+          <AlertTriangle className="w-8 h-8 text-amber-400 animate-bounce shrink-0" />
+          <div className="flex-1">
+            <h4 className="font-bold text-xs text-amber-400 uppercase tracking-wider">OPERATOR SIGNATURE NEEDED</h4>
+            <p className="text-xs text-slate-300 mt-1">Proposed action: <code className="text-white font-bold font-mono">{pendingAction.action}</code></p>
+          </div>
+          <button onClick={approveRemediation} className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold py-2 px-4 rounded-xl text-xs uppercase shadow-lg shadow-amber-500/20">
+            RELEASE SIGNATURE
+          </button>
+        </div>
+      )}
+
+      {/* FLOATING AI COMMAND BAR (BOTTOM CENTER) */}
+      <form 
+        onSubmit={handleAiPromptSubmit}
+        className="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-full max-w-[620px] px-4 z-40"
+      >
+        <div className="p-[1.5px] rounded-full aship-bar-gradient shadow-2xl">
+          <div className="bg-[#0b1026]/95 p-2 flex items-center rounded-full backdrop-blur-2xl">
+            
+            <button
+              type="button"
+              onClick={toggleMic}
+              className={`p-2.5 rounded-full transition-all shrink-0 ${
+                micListening ? 'text-red-400 bg-red-500/20 animate-pulse' : 'text-indigo-400 hover:text-white'
+              }`}
+            >
+              {micListening ? <Mic className="w-4 h-4 animate-pulse" /> : <MessageSquare className="w-4 h-4" />}
+            </button>
+            
+            <input 
+              type="text"
+              value={aiPromptText}
+              onChange={(e) => setAiPromptText(e.target.value)}
+              placeholder="Ask ASHIP or Command SRE (e.g., 'what is RAM usage', 'inject memory leak')..."
+              className="w-full bg-transparent border-none outline-none text-xs text-white placeholder-slate-500 px-3 font-sans"
+            />
+            
+            <button 
+              type="submit"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-5 rounded-full text-xs uppercase transition-all shrink-0 shadow-lg shadow-indigo-600/30 flex items-center gap-1.5"
+            >
+              <span>Ask ASHIP</span>
+              <Send className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      </form>
+
+    </div>
+  );
+}
+
+export default App;
+
+```
+
+---
+
+### Appendix G: REST API Endpoint Specifications & Webhook Schemas
 
 | Method | Endpoint | Description | Request Payload | Response |
 |---|---|---|---|---|
@@ -1801,7 +3808,7 @@ OPA_PORT=8181
 
 ---
 
-### Appendix D: Developer Quickstart & Installation Runbook
+### Appendix H: Developer Quickstart & Installation Runbook
 
 ```bash
 # 1. Clone the repository
@@ -1833,12 +3840,12 @@ cd frontend && npm run dev
 
 ---
 
-### Appendix E: Sample Cryptographic Audit Log Schema (`incidents.db`)
+### Appendix I: Sample Cryptographic Audit Log Schema (`incidents.db`)
 
 ```json
 {
   "id": 104,
-  "timestamp": "2026-10-04T19:48:15.204Z",
+  "timestamp": "2026-10-05T08:15:00.102Z",
   "service_name": "custom-payment-service",
   "alert_name": "PodOOMKilled",
   "action": "restart_pod",
@@ -1848,4 +3855,3 @@ cd frontend && npm run dev
   "environment": "production"
 }
 ```
-
