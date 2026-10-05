@@ -1412,10 +1412,12 @@ A synthetic fault injector was integrated into `target-app/app.py` to trigger fo
 
 ##### 1. Mean Time to Recovery (MTTR) Reduction (Delta_MTTR)
 - **MTTR Reduction Formula**:
-  $$	ext{MTTR\_Reduction} = \left( rac{	ext{MTTR}_{	ext{Human}} - 	ext{MTTR}_{	ext{ASHIP}}}{	ext{MTTR}_{	ext{Human}}} ight) 	imes 100\%$$
+  $$	ext{MTTR\_Reduction} = \left( rac{	ext{MTTR}_{	ext{Human}} - 	ext{MTTR}_{	ext{ASHIP}}}{	ext{MTTR}_{	ext{Human}}} 
+ight) 	imes 100\%$$
 - **Empirical Measurement**:
   Where $	ext{MTTR}_{	ext{Human}} = 2,400	ext{ s}$ (40 minutes) and $	ext{MTTR}_{	ext{ASHIP}} = 1.42	ext{ s}$.
-  $$	ext{MTTR\_Reduction} = \left( rac{2,400 - 1.42}{2,400} ight) 	imes 100\% = 99.94\%$$
+  $$	ext{MTTR\_Reduction} = \left( rac{2,400 - 1.42}{2,400} 
+ight) 	imes 100\% = 99.94\%$$
 
 ##### 2. System Availability SLA Formula (A)
 $$A = rac{	ext{MTBF}}{	ext{MTBF} + 	ext{MTTR}} 	imes 100\%$$
