@@ -55,10 +55,13 @@ Finally, I owe a debt of eternal gratitude to my parents, family members, and fr
   - 1.4 Scope of the Project
   - 1.5 Motivation
 - [Chapter 2. Literature Review](#chapter-2-literature-review)
-  - 2.1 Existing Systems / Related Works
-  - 2.2 Limitations of Existing Systems
-  - 2.3 Research Gap
-  - 2.4 Proposed Approach
+  - 2.1 Introduction
+  - 2.2 Category 1: Traditional Observability & Alerting Platforms
+  - 2.3 Category 2: Static Rule-Based Automation Engines
+  - 2.4 Category 3: Alert Aggregation & Incident Management
+  - 2.5 Category 4: Modern AI Assistants & Copilots (The "Read-Only" AI)
+  - 2.6 Category 5: Advanced Autonomy & Agentic Systems
+  - 2.7 Conclusion and Problem Identification (The Research Gap)
 - [Chapter 3. System Analysis](#chapter-3-system-analysis)
   - 3.1 System Requirements (Functional & Non-Functional)
   - 3.2 Feasibility Study (Technical, Operational, Economic, Legal)
@@ -154,31 +157,109 @@ The inspiration for ASHIP stems from the realization that cloud infrastructure s
 
 ## CHAPTER 2. LITERATURE REVIEW
 
-### 2.1 Existing Systems / Related Works
-1. **Traditional APM & Observability Platforms (Datadog, Dynatrace, New Relic, Prometheus)**:
-   - Provide telemetry ingestion, metric visualization, and threshold-based alerting.
-   - *Limitation*: Passive monitoring tools; they notify humans via PagerDuty but cannot autonomously remediate root causes.
-2. **Kubernetes Auto-Scaler & Restart Policies (K8s HPA, VPA, Liveness Probes)**:
-   - Perform static pod restarts upon process exit code failure or CPU thresholds.
-   - *Limitation*: Lacks cognitive reasoning; cannot diagnose application-level memory leaks, thread locks, or multi-service dependencies.
-3. **Automated Runbook Runners (Rundeck, AWS Systems Manager Automation)**:
-   - Execute fixed, deterministic shell scripts triggered by specific webhooks.
-   - *Limitation*: Rigid and brittle; fails when encountering novel or unscripted complex incident conditions.
+### 2.1 Introduction
+The paradigm of IT Operations has shifted significantly over the last decade, transitioning from manual system administration to Site Reliability Engineering (SRE), and currently evolving towards Artificial Intelligence for IT Operations (AIOps). As microservice architectures and Kubernetes (K8s) deployments scale, the volume of telemetry data generated exceeds human cognitive capacity, leading to severe alert fatigue and prolonged Mean Time To Resolution (MTTR).
 
-### 2.2 Limitations of Existing Systems
-| Solution Type | Autonomous Action? | Cognitive AI Reasoning? | Policy-as-Code Guardrails? | MTTR Speed |
-|---|---|---|---|---|
-| **Manual SRE + PagerDuty** | ❌ No | 👨‍💻 Human Only | ❌ Manual Checklists | 🐢 30 - 45 Mins |
-| **K8s Liveness Probes** | ⚠️ Basic Restarts | ❌ No | ❌ Hardcoded Probes | ⏱️ 2 - 5 Mins |
-| **Rule-Based Webhooks** | ⚠️ Scripted | ❌ No | ❌ Static Rules | ⏱️ 1 - 3 Mins |
-| **Unconstrained LLM Agents**| ✅ Yes | ✅ Yes | ❌ Dangerous (No OPA) | ⚡ < 5 Secs (Unsafe) |
-| **ASHIP Protocol** | ✅ **Yes** | ✅ **Yes (Llama 3.1)** | ✅ **Yes (OPA Rego)** | 🚀 **1.4 Seconds** |
+This literature review evaluates the current landscape of AIOps, observability platforms, and automation engines. By analyzing fifteen prominent open-source and commercial solutions across five structural categories, this section identifies existing technological limitations and establishes the critical research gap that the **Autonomous Self-Healing Infrastructure Protocol (ASHIP)** aims to bridge.
 
-### 2.3 Research Gap
-Existing research presents a binary dilemma: either rely on slow, manual human intervention to maintain security compliance, or deploy unconstrained AI agents that risk catastrophic accidental deletions. There is a fundamental research gap in designing an **autonomous hybrid engine** that combines the cognitive reasoning of LLMs with the absolute deterministic security guarantees of Policy-as-Code.
+---
 
-### 2.4 Proposed Approach
-ASHIP addresses this gap by decoupling **Decision Generation** (LLM Cognitive Engine) from **Decision Authorization** (OPA Rego Policy Sandbox). The LLM proposes remediation plans based on live telemetry and runbook RAG, but cannot execute them directly. All proposed actions must pass through an un-bypassable Rego security gateway, generating an HMAC-SHA256 signed audit payload before execution.
+### 2.2 Category 1: Traditional Observability & Alerting Platforms
+These platforms represent the current industry standard for system monitoring. They excel at data ingestion and anomaly detection but fundamentally lack autonomous remediation capabilities.
+
+#### 1. Datadog Watchdog
+Utilizes machine learning algorithms to detect anomalies in server metrics and application logs.
+- **Limitation**: Functions purely as an alerting engine. It suffers from "alert fatigue" by constantly notifying engineers with warnings without taking autonomous action to resolve them.
+
+#### 2. Splunk ITSI (IT Service Intelligence)
+Applies predictive analytics to forecast potential IT service failures based on historical performance data.
+- **Limitation**: Acts primarily as a dashboarding and forecasting tool. It requires a dedicated data-engineering team to maintain and does not execute self-healing protocols.
+
+#### 3. Dynatrace (Davis AI)
+Employs "Causal AI" to navigate deterministic dependency graphs to locate the root cause of an application crash.
+- **Limitation**: While its root-cause analysis is highly accurate, it is a closed-source, proprietary, and expensive enterprise tool that still relies on human operators to initiate the final remediation step.
+
+---
+
+### 2.3 Category 2: Static Rule-Based Automation Engines
+To combat manual remediation, the industry introduced event-driven automation tools that execute scripts based on predefined triggers.
+
+#### 4. StackStorm
+Often described as "If This Then That (IFTTT) for IT Operations," it runs event-driven automation workflows.
+- **Limitation**: Operates strictly on deterministic logic. It lacks the semantic reasoning required to analyze complex, unstructured log data for novel problems.
+
+#### 5. Keptn (by CNCF)
+A cloud-native application lifecycle orchestrator that triggers auto-remediation scripts when a Prometheus alert fires.
+- **Limitation**: Engineers must manually write a remediation script for every single possible error. If an unexpected error occurs, Keptn fails to respond.
+
+#### 6. PagerDuty Process Automation (formerly Rundeck)
+Allows engineers to create automated runbooks for incident response.
+- **Limitation**: The automation is static. If a server crashes for a reason that deviates even slightly from the pre-written runbook, the automation sequence breaks.
+
+#### 7. AWS DevOps Guru
+A machine learning service inside AWS that detects operational issues and recommends specific fixes.
+- **Limitation**: Suffers from severe vendor lock-in, functioning optimally only within the AWS ecosystem. Furthermore, it recommends fixes rather than autonomously executing them.
+
+---
+
+### 2.4 Category 3: Alert Aggregation & Incident Management
+These tools focus on organizing operational chaos rather than fixing the underlying infrastructure bugs.
+
+#### 8. BigPanda
+An AIOps event correlation platform that ingests thousands of alerts from different monitoring tools and groups them into a single incident context.
+- **Limitation**: Reduces noise for human operators, but a human engineer is still required to physically log in, analyze the grouped incident, and execute the fix.
+
+#### 9. Moogsoft
+Similar to BigPanda, it uses machine learning to reduce alert noise and correlate related incidents.
+- **Limitation**: Solely focused on incident management (ticketing and alerting), possessing very limited automated remediation capabilities.
+
+#### 10. Webb.ai
+Uses generative AI to automate the creation of post-mortem incident reports by parsing system logs.
+- **Limitation**: The AI is applied post-incident. It does not actively interact with the cluster to heal the system during an active outage.
+
+---
+
+### 2.5 Category 4: Modern AI Assistants & Copilots (The "Read-Only" AI)
+With the advent of Large Language Models (LLMs), tools have emerged that can explain infrastructure errors in natural language.
+
+#### 11. K8sGPT
+An open-source tool that scans Kubernetes clusters, diagnoses issues, and uses AI to explain errors in plain English.
+- **Limitation**: Strictly "Read-Only." It diagnoses the problem but possesses no execution layer to autonomously resolve it.
+
+#### 12. Robusta.dev
+An open-source Kubernetes automation engine that enriches alerts with context and logs.
+- **Limitation**: Like Keptn, it relies heavily on hardcoded playbooks rather than utilizing Agentic reasoning (an OODA loop) to solve dynamic problems.
+
+#### 13. Kubiya.ai
+Provides a conversational AI assistant for DevOps teams to run infrastructure commands via Slack.
+- **Limitation**: Operates as a "Copilot," not an autonomous agent. It depends on "Human-in-the-Loop" prompts in Slack rather than acting autonomously in the background when an anomaly occurs.
+
+---
+
+### 2.6 Category 5: Advanced Autonomy & Agentic Systems
+The most advanced tier of tools attempts full autonomy, though they face challenges regarding safety and domain-specific execution.
+
+#### 14. Devin / SWE-Agent (Cognition AI)
+Autonomous AI software engineers capable of writing code, fixing bugs, and deploying applications.
+- **Limitation**: Optimized for software engineering (modifying source code in an IDE). They are not designed for real-time infrastructure operations (e.g., managing rolling restarts, scaling pods, or mitigating live memory leaks).
+
+#### 15. Shoreline.io
+An incident automation platform that allows SREs to execute fixes across thousands of servers simultaneously.
+- **Limitation**: Built primarily for human execution across fleets. While highly scalable, it lacks the strict "Policy-as-Code" (e.g., Open Policy Agent) AI guardrails required to safely deploy an autonomous LLM into production.
+
+---
+
+### 2.7 Conclusion and Problem Identification (The Research Gap)
+The literature review reveals a fragmented landscape in IT operations technology:
+1. **Observability giants** possess the **"eyes"** to see the problem but lack the **"hands"** to fix it.
+2. **Automation engines** possess the **"hands"** but lack the **"brain"** (semantic reasoning) to adapt to novel issues.
+3. **AI Copilots** possess the **"brain"** to understand the problem but are intentionally crippled (**read-only**) due to a lack of a secure **"shield"** (safety guardrails).
+
+#### The Defined Research Gap
+The defined research gap is the **absence of an open-source, cloud-agnostic protocol that unifies dynamic AI reasoning with autonomous execution under strict, mathematically sound security boundaries**.
+
+The **Autonomous Self-Healing Infrastructure Protocol (ASHIP)** is proposed directly to bridge this gap. By combining an Agentic LLM utilizing an **Observe-Orient-Decide-Act (OODA)** loop with the **Open Policy Agent (OPA)** for Policy-as-Code validation, ASHIP provides the intelligence to solve novel infrastructure failures autonomously while guaranteeing the AI cannot execute destructive actions against the cluster.
+
 
 ---
 
